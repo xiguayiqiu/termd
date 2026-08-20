@@ -1,0 +1,14 @@
+# CodeBuddy 工作记忆（跨会话上下文，不入库）
+.codebuddy/memory/
+
+# vim-master 源码树（第三方参考代码，不入库）
+vim-master/
+
+# Go 测试文件
+*_test.go
+#二进制
+*.exe
+termd
+#测试文件
+test.md
+test*.md
