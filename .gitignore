@@ -9,6 +9,8 @@ vim-master/
 #二进制
 *.exe
 termd
+#交叉编译产物
+dist/
 #测试文件
 test.md
 test*.md

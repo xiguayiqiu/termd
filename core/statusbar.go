@@ -1,8 +1,9 @@
-package main
+package core
 
 import (
 	"fmt"
 	"strings"
+	"termd"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -40,14 +41,14 @@ func cmdPrefixStyle(prefix rune) (bg, fg lipgloss.Color) {
 }
 
 // modeBlockColors 返回当前模式下状态栏左段（模式块）的配色，贴近 vim StatusLine。
-func (m *editorModel) modeBlockColors() statusColors {
+func (m *EditorModel) modeBlockColors() statusColors {
 	switch m.sm.Mode() {
-	case ModeEdit:
-		if m.sm.editSubName() == "INSERT" {
+	case termd.ModeEdit:
+		if m.sm.EditSubName() == "INSERT" {
 			return statusColors{lipgloss.Color("34"), lipgloss.Color("255")} // 绿底（vim INSERT）
 		}
 		return statusColors{lipgloss.Color("61"), lipgloss.Color("255")} // 紫底（NORMAL）
-	case ModePreview:
+	case termd.ModePreview:
 		return statusColors{lipgloss.Color("25"), lipgloss.Color("255")} // 深蓝底
 	default:
 		return statusColors{lipgloss.Color("63"), lipgloss.Color("255")} // 蓝底（命令等）
@@ -55,25 +56,25 @@ func (m *editorModel) modeBlockColors() statusColors {
 }
 
 // statusBar 渲染底部状态栏（固定 1 行，永远在最底部，仿 vim）。
-func (m *editorModel) statusBar() string {
+func (m *EditorModel) statusBar() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
 	}
 
 	// ---- 左段：模式块 + 文件名 + 修改标记 ----
-	mode := modeNames[m.sm.Mode()]
-	if sub := m.sm.editSubName(); sub != "" {
+	mode := termd.ModeNames[m.sm.Mode()]
+	if sub := m.sm.EditSubName(); sub != "" {
 		mode = sub // EDIT 模式直接显示 INSERT / NORMAL，更贴近 vim
 	}
 	mc := m.modeBlockColors()
 	// 文件名 + 脏标记
-	fname := m.buf.filePath
+	fname := m.Buf.FilePath()
 	if fname == "" {
 		fname = "[未命名]"
 	}
 	flags := ""
-	if m.buf.IsDirty {
+	if m.Buf.IsDirty {
 		flags += "[+]"
 	}
 	leftText := fmt.Sprintf(" %s  %s %s ", mode, fname, flags)
@@ -90,18 +91,18 @@ func (m *editorModel) statusBar() string {
 	} else {
 		// 标尺：行,列 / 百分比 / 总行数 / 行号模式
 		rowLine := m.cursorRow
-		if m.sm.Mode() == ModePreview {
+		if m.sm.Mode() == termd.ModePreview {
 			rowLine = m.previewCursor
 		}
-		total := m.buf.LineCount()
+		total := m.Buf.LineCount()
 		col := m.cursorCol + 1
 		pct := 0
 		if total > 0 {
 			pct = (rowLine * 100) / total
 		}
 		lnMode := ""
-		if lm := m.sm.LineNumMode(); lm != lnNone {
-			lnMode = " " + lm.name()
+		if lm := m.sm.LineNumMode(); lm != termd.LNNone {
+			lnMode = " " + lm.Name()
 		}
 		rightText = fmt.Sprintf("%d,%d  %d%%%%  %dL%s ", rowLine+1, col, pct, total, lnMode)
 	}
@@ -123,8 +124,8 @@ func (m *editorModel) statusBar() string {
 }
 
 // renderCmdLine 渲染命令/搜索输入框（仿 vim 的命令行，显示在最底部，独占整行）。
-func (m *editorModel) renderCmdLine() string {
-	input := m.sm.cmdInput
+func (m *EditorModel) renderCmdLine() string {
+	input := m.sm.CmdInput
 	if input == "" {
 		input = ":"
 	}

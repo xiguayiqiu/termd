@@ -1,4 +1,4 @@
-package main
+package termd
 
 import (
 	"bytes"
@@ -30,18 +30,18 @@ type fbMode int
 
 const (
 	fbList    fbMode = iota // 正常列表浏览
-	fbInput                 // 输入名称（创建文件夹/文件）
-	fbConfirm               // 确认删除弹窗
+	FBInput                 // 输入名称（创建文件夹/文件）
+	FBConfirm               // 确认删除弹窗
 )
 
-// fbUseIcons 控制是否渲染 Nerd Font 文件图标。
+// FBUseIcons 控制是否渲染 Nerd Font 文件图标。
 // 仅当终端使用 Nerd Font（如 0xproto Nerd Font、FiraCode Nerd Font 等）时才应
 // 开启；普通终端无这些字形，开启会显示空白方块/乱码。默认关闭——用户若使用
 // Nerd Font，可在 .termdrc 写 `fileicons`，或运行时 `:set fileicons` 开启；
 // 关闭用 `nofileicons` / `:set nofileicons`。
-var fbUseIcons = false
+var FBUseIcons = false
 
-// Nerd Font 图标（仅在 fbUseIcons=true 时按后缀拼接在名称前）。
+// Nerd Font 图标（仅在 FBUseIcons=true 时按后缀拼接在名称前）。
 // 这些字形来自 Nerd Font 内嵌的 devicon / Font Awesome / Material 集合，
 // 普通字体无此映射。
 const (
@@ -50,7 +50,7 @@ const (
 	iconFile   = "\uf15b " // 󰅛  nf-fa-file（通用文件兜底）
 )
 
-// fbIconByExt 按文件后缀映射 Nerd Font 图标（仅 fbUseIcons=true 时生效）。
+// fbIconByExt 按文件后缀映射 Nerd Font 图标（仅 FBUseIcons=true 时生效）。
 // 覆盖常见文本/代码/图片/音视频/压缩包/配置类型；未列出的后缀回退到通用文件图标。
 var fbIconByExt = map[string]string{
 	// 文档 / 标记语言
@@ -104,10 +104,10 @@ var fbScriptExts = map[string]bool{
 }
 
 // entryIcon 返回某条目的 Nerd Font 图标前缀（含尾随空格）。
-// 仅在 fbUseIcons=true 时返回非空图标；否则返回空串（不渲染图标）。
+// 仅在 FBUseIcons=true 时返回非空图标；否则返回空串（不渲染图标）。
 // 优先级：目录→文件夹；文件→按后缀查表，未命中回退通用文件图标。
 func (fb *FileBrowser) entryIcon(name string) string {
-	if !fbUseIcons {
+	if !FBUseIcons {
 		return ""
 	}
 	if name == "../" || name == ".." || strings.HasSuffix(name, "/") {
@@ -121,7 +121,7 @@ func (fb *FileBrowser) entryIcon(name string) string {
 
 // entryStyle 根据条目名称返回（着色样式, 图标前缀）。
 // 规则：目录→蓝+文件夹图标；普通文件有可执行位或脚本扩展名→绿+代码图标；
-// 其余普通文件→默认色+对应后缀图标。图标仅在 fbUseIcons=true 时渲染。
+// 其余普通文件→默认色+对应后缀图标。图标仅在 FBUseIcons=true 时渲染。
 func (fb *FileBrowser) entryStyle(name string) (lipgloss.Style, string) {
 	icon := fb.entryIcon(name)
 	// 目录（含 "../" 上级目录）
@@ -129,7 +129,7 @@ func (fb *FileBrowser) entryStyle(name string) (lipgloss.Style, string) {
 		return fbDirStyle, icon
 	}
 	// 普通文件：检查可执行位或脚本扩展名
-	full := filepath.Join(fb.dir, name)
+	full := filepath.Join(fb.Dir, name)
 	if info, err := os.Stat(full); err == nil {
 		mode := info.Mode()
 		executable := mode.IsRegular() && mode.Perm()&0111 != 0
@@ -143,24 +143,24 @@ func (fb *FileBrowser) entryStyle(name string) (lipgloss.Style, string) {
 
 // FileBrowser 极简文件浏览器状态。
 type FileBrowser struct {
-	open     bool
-	dir      string
+	Opened   bool
+	Dir      string
 	entries  []string // 目录项（含相对路径）
 	cursor   int
 	selected string // 用户最终选择的文件路径；空表示取消
 
 	// 增强功能状态
-	mode          fbMode // 当前子模式（列表/输入/确认）
-	inputLabel    string // 输入提示："dirname:" / "textname:"
-	inputBuf      string // 当前输入的文件/文件夹名称
+	Mode          fbMode // 当前子模式（列表/输入/确认）
+	InputLabel    string // 输入提示："dirname:" / "textname:"
+	InputBuf      string // 当前输入的文件/文件夹名称
 	createKind    string // "dir" 创建文件夹 / "file" 创建文件
-	pendingDelete string // 待删除项的相对名（如 "foo/" 或 "bar.md"）
+	PendingDelete string // 待删除项的相对名（如 "foo/" 或 "bar.md"）
 	pendingRename string // 待重命名项的相对名（如 "foo/" 或 "bar.md"）
 
 	// 两栏布局：右侧文本预览
 	previewLines  []string // 当前光标选中文本文件的内容（按行）
 	previewScroll int      // 右侧预览区垂直滚动偏移
-	focusRight    bool     // 焦点是否在右栏预览区（false=左栏列表）
+	FocusRight    bool     // 焦点是否在右栏预览区（false=左栏列表）
 
 	// 左栏列表滚动偏移：持久化在状态里，使光标移动时列表“按行平滑滚动”
 	// （光标越出可视区才卷动一行），而非每步重新居中到半屏中央——后者会让
@@ -168,33 +168,33 @@ type FileBrowser struct {
 	listTop int
 
 	// 输入子模式（创建/重命名）的可移动光标位置（以 rune 计，0=行首）
-	inputPos int
+	InputPos int
 }
 
 // NewFileBrowser 构造文件浏览器，定位到 dir。
 func NewFileBrowser(dir string) *FileBrowser {
-	fb := &FileBrowser{dir: dir, cursor: 0, mode: fbList}
+	fb := &FileBrowser{Dir: dir, cursor: 0, Mode: fbList}
 	fb.reload()
 	return fb
 }
 
 // Open 打开浏览器。
-func (fb *FileBrowser) Open() { fb.open = true; fb.reload() }
+func (fb *FileBrowser) Open() { fb.Opened = true; fb.reload() }
 
 // Close 关闭浏览器并清空选择。
 func (fb *FileBrowser) Close() {
-	fb.open = false
+	fb.Opened = false
 	fb.selected = ""
-	fb.mode = fbList
-	fb.inputBuf = ""
-	fb.pendingDelete = ""
+	fb.Mode = fbList
+	fb.InputBuf = ""
+	fb.PendingDelete = ""
 	fb.pendingRename = ""
-	fb.inputPos = 0
+	fb.InputPos = 0
 }
 
 // reload 重新读取目录内容，目录在前、文件在后，按名称排序。
 func (fb *FileBrowser) reload() {
-	entries, err := os.ReadDir(fb.dir)
+	entries, err := os.ReadDir(fb.Dir)
 	if err != nil {
 		fb.entries = []string{".. (读取失败)"}
 		return
@@ -245,20 +245,20 @@ func (fb *FileBrowser) Confirm() string {
 	name := fb.entries[fb.cursor]
 	switch {
 	case name == "../" || name == "..":
-		parent := filepath.Dir(fb.dir)
-		if parent != fb.dir {
-			fb.dir = parent
+		parent := filepath.Dir(fb.Dir)
+		if parent != fb.Dir {
+			fb.Dir = parent
 			fb.cursor = 0
 			fb.reload()
 		}
 		return ""
 	case strings.HasSuffix(name, "/"):
-		fb.dir = filepath.Join(fb.dir, strings.TrimSuffix(name, "/"))
+		fb.Dir = filepath.Join(fb.Dir, strings.TrimSuffix(name, "/"))
 		fb.cursor = 0
 		fb.reload()
 		return ""
 	default:
-		fb.selected = filepath.Join(fb.dir, name)
+		fb.selected = filepath.Join(fb.Dir, name)
 		return fb.selected
 	}
 }
@@ -305,7 +305,7 @@ func (fb *FileBrowser) refreshPreview() {
 		fb.previewLines = fb.binaryPreviewLines(name)
 		return
 	}
-	path := filepath.Join(fb.dir, name)
+	path := filepath.Join(fb.Dir, name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		fb.previewLines = []string{T("读取失败: ") + err.Error()}
@@ -370,7 +370,7 @@ func looksBinary(data []byte) bool {
 // binaryPreviewLines 为非文本（二进制）文件生成属性面板，取代原先的单一提示。
 // 展示：名称、类型/扩展名、字节大小（带 KB/MB 单位）、权限位、最后修改时间。
 func (fb *FileBrowser) binaryPreviewLines(name string) []string {
-	path := filepath.Join(fb.dir, name)
+	path := filepath.Join(fb.Dir, name)
 	info, err := os.Stat(path)
 	if err != nil {
 		return []string{T("读取失败: ") + err.Error()}
@@ -448,21 +448,21 @@ func (fb *FileBrowser) ScrollPreview(d int) {
 
 // ToggleFocus 在左栏列表 / 右栏预览之间切换输入焦点（Tab 键）。
 func (fb *FileBrowser) ToggleFocus() {
-	fb.focusRight = !fb.focusRight
+	fb.FocusRight = !fb.FocusRight
 }
 
 // ---- 增强功能：创建文件夹 / 创建文件 / 删除 ----
 
 // StartCreate 进入「输入名称」子模式，准备创建文件夹(kind="dir")或文件(kind="file")。
 func (fb *FileBrowser) StartCreate(kind string) {
-	fb.mode = fbInput
+	fb.Mode = FBInput
 	fb.createKind = kind
-	fb.inputBuf = ""
-	fb.inputPos = 0
+	fb.InputBuf = ""
+	fb.InputPos = 0
 	if kind == "dir" {
-		fb.inputLabel = T("dirname: ")
+		fb.InputLabel = T("dirname: ")
 	} else {
-		fb.inputLabel = T("filename: ")
+		fb.InputLabel = T("filename: ")
 	}
 }
 
@@ -477,85 +477,85 @@ func (fb *FileBrowser) StartRename() string {
 		return T("不能重命名上级目录")
 	}
 	fb.pendingRename = name
-	fb.mode = fbInput
-	fb.inputBuf = strings.TrimSuffix(name, "/") // 预填原名（去尾部斜杠），便于直接修改
-	fb.inputPos = len([]rune(fb.inputBuf))      // 光标置于末尾，可向左移动修改
-	fb.inputLabel = T("重命名: ")
+	fb.Mode = FBInput
+	fb.InputBuf = strings.TrimSuffix(name, "/") // 预填原名（去尾部斜杠），便于直接修改
+	fb.InputPos = len([]rune(fb.InputBuf))      // 光标置于末尾，可向左移动修改
+	fb.InputLabel = T("重命名: ")
 	return ""
 }
 
 // AppendInput 在光标位置插入字符（按 rune 处理，兼容中文/emoji），随后光标右移。
 func (fb *FileBrowser) AppendInput(runes []rune) {
-	r := []rune(fb.inputBuf)
-	if fb.inputPos > len(r) {
-		fb.inputPos = len(r)
+	r := []rune(fb.InputBuf)
+	if fb.InputPos > len(r) {
+		fb.InputPos = len(r)
 	}
-	head := r[:fb.inputPos]
-	tail := r[fb.inputPos:]
+	head := r[:fb.InputPos]
+	tail := r[fb.InputPos:]
 	merged := append(head, runes...)
 	merged = append(merged, tail...)
-	fb.inputBuf = string(merged)
-	fb.inputPos += len(runes)
+	fb.InputBuf = string(merged)
+	fb.InputPos += len(runes)
 }
 
 // BackspaceInput 删除光标前的一个字符（按 rune），光标左移；行首不动作。
 func (fb *FileBrowser) BackspaceInput() {
-	r := []rune(fb.inputBuf)
-	if fb.inputPos <= 0 || len(r) == 0 {
+	r := []rune(fb.InputBuf)
+	if fb.InputPos <= 0 || len(r) == 0 {
 		return
 	}
-	head := r[:fb.inputPos-1]
-	tail := r[fb.inputPos:]
-	fb.inputBuf = string(append(head, tail...))
-	fb.inputPos--
+	head := r[:fb.InputPos-1]
+	tail := r[fb.InputPos:]
+	fb.InputBuf = string(append(head, tail...))
+	fb.InputPos--
 }
 
 // DeleteForward 删除光标后的一个字符（按 rune），光标不动；行尾不动作。
 func (fb *FileBrowser) DeleteForward() {
-	r := []rune(fb.inputBuf)
-	if fb.inputPos >= len(r) || len(r) == 0 {
+	r := []rune(fb.InputBuf)
+	if fb.InputPos >= len(r) || len(r) == 0 {
 		return
 	}
-	head := r[:fb.inputPos]
-	tail := r[fb.inputPos+1:]
-	fb.inputBuf = string(append(head, tail...))
+	head := r[:fb.InputPos]
+	tail := r[fb.InputPos+1:]
+	fb.InputBuf = string(append(head, tail...))
 }
 
 // MoveInput 移动输入光标（d>0 右移 / d<0 左移），钳制在 [0, len(runes)] 范围内。
 func (fb *FileBrowser) MoveInput(d int) {
-	r := []rune(fb.inputBuf)
-	fb.inputPos += d
-	if fb.inputPos < 0 {
-		fb.inputPos = 0
+	r := []rune(fb.InputBuf)
+	fb.InputPos += d
+	if fb.InputPos < 0 {
+		fb.InputPos = 0
 	}
-	if fb.inputPos > len(r) {
-		fb.inputPos = len(r)
+	if fb.InputPos > len(r) {
+		fb.InputPos = len(r)
 	}
 }
 
 // InputJump 跳到输入行首(d<0)或行尾(d>0)。
 func (fb *FileBrowser) InputJump(end bool) {
-	r := []rune(fb.inputBuf)
+	r := []rune(fb.InputBuf)
 	if end {
-		fb.inputPos = len(r)
+		fb.InputPos = len(r)
 	} else {
-		fb.inputPos = 0
+		fb.InputPos = 0
 	}
 }
 
 // SubmitInput 提交「输入名称」：根据上下文执行重命名或创建文件夹/文件，返回状态消息。
 // 校验：名称非空、不含路径分隔符、不以点开头（避免越界/隐藏项）。
 func (fb *FileBrowser) SubmitInput() string {
-	name := strings.TrimSpace(fb.inputBuf)
-	fb.mode = fbList
-	fb.inputBuf = ""
+	name := strings.TrimSpace(fb.InputBuf)
+	fb.Mode = fbList
+	fb.InputBuf = ""
 	if fb.pendingRename != "" {
 		return fb.submitRename(name)
 	}
 	if name == "" || name == ".." || strings.Contains(name, "/") || strings.HasPrefix(name, ".") {
 		return T("名称无效（不能为空/含 / /以 . 开头）")
 	}
-	target := filepath.Join(fb.dir, name)
+	target := filepath.Join(fb.Dir, name)
 	// 已存在则拒绝，避免误覆盖
 	if _, err := os.Stat(target); err == nil {
 		return T("已存在，未创建: ") + name
@@ -589,8 +589,8 @@ func (fb *FileBrowser) submitRename(name string) string {
 		return T("名称无效（不能为空/含 / /以 . 开头）")
 	}
 	oldBase := strings.TrimSuffix(old, "/")
-	oldTarget := filepath.Join(fb.dir, oldBase)
-	newTarget := filepath.Join(fb.dir, name)
+	oldTarget := filepath.Join(fb.Dir, oldBase)
+	newTarget := filepath.Join(fb.Dir, name)
 	// 目标已存在（且非自身）则拒绝，避免误覆盖
 	if info, err := os.Stat(newTarget); err == nil && info.Name() != oldBase {
 		return T("已存在，未重命名: ") + name
@@ -613,24 +613,24 @@ func (fb *FileBrowser) StartDelete() string {
 	if name == "../" || name == ".." {
 		return T("不能删除上级目录")
 	}
-	fb.pendingDelete = name
-	fb.mode = fbConfirm
+	fb.PendingDelete = name
+	fb.Mode = FBConfirm
 	return ""
 }
 
 // ConfirmDelete 处理「确认删除」结果：yes=true 执行删除，否则取消。
 func (fb *FileBrowser) ConfirmDelete(yes bool) string {
-	pending := fb.pendingDelete
-	fb.mode = fbList
-	fb.pendingDelete = ""
-	fb.inputBuf = ""
+	pending := fb.PendingDelete
+	fb.Mode = fbList
+	fb.PendingDelete = ""
+	fb.InputBuf = ""
 	if !yes {
 		return T("已取消删除")
 	}
 	if pending == "" {
 		return ""
 	}
-	target := filepath.Join(fb.dir, strings.TrimSuffix(pending, "/"))
+	target := filepath.Join(fb.Dir, strings.TrimSuffix(pending, "/"))
 	if err := os.RemoveAll(target); err != nil {
 		return T("删除失败: ") + err.Error()
 	}
@@ -641,11 +641,11 @@ func (fb *FileBrowser) ConfirmDelete(yes bool) string {
 
 // Cancel 取消当前子模式（输入/确认），回到列表浏览。
 func (fb *FileBrowser) Cancel() {
-	fb.mode = fbList
-	fb.inputBuf = ""
-	fb.pendingDelete = ""
+	fb.Mode = fbList
+	fb.InputBuf = ""
+	fb.PendingDelete = ""
 	fb.pendingRename = ""
-	fb.inputPos = 0
+	fb.InputPos = 0
 }
 
 // Render 渲染文件浏览器视图字符串（两栏：左=文件列表，右=文本预览）。
@@ -738,10 +738,10 @@ func (fb *FileBrowser) Render(width, height int) string {
 	return title + "\n" + mid.String()
 }
 
-// fbDisplayWidth 返回字符串的【显示列宽】：(宽字符)东亚 CJK / 全角标点 / emoji 等
+// FBDisplayWidth 返回字符串的【显示列宽】：(宽字符)东亚 CJK / 全角标点 / emoji 等
 // 占 2 列，其余（含半角、西文、窄 emoji）占 1 列。不能用 len([]rune) 近似，否则中文
 // 等宽字符会被少算，导致 fbFit 截断后实际显示宽度超出列宽，被 lipgloss 软换行撑高整行。
-func fbDisplayWidth(s string) int {
+func FBDisplayWidth(s string) int {
 	w := 0
 	for _, r := range s {
 		if r >= 0x1100 &&
@@ -774,7 +774,7 @@ func fbFit(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if fbDisplayWidth(s) <= w {
+	if FBDisplayWidth(s) <= w {
 		return s
 	}
 	// 逐 rune 累加显示宽度，截断到 w-1 列，末尾补 "…"（占 1 列）
@@ -852,7 +852,7 @@ func (fb *FileBrowser) renderListPane(w, h int) []string {
 			prefix = "> "
 		}
 		style, icon := fb.entryStyle(e)
-		cursor := i == fb.cursor && !fb.focusRight
+		cursor := i == fb.cursor && !fb.FocusRight
 		label := fbFit(icon+e, w-len([]rune(prefix)))
 		var rendered string
 		if cursor {
@@ -884,7 +884,7 @@ func (fb *FileBrowser) renderPreviewPane(w, h int) []string {
 		// 超宽截断（按显示列宽），避免右栏溢出被软换行撑高整行
 		line = fbFit(line, w)
 		// 焦点在右栏时，光标行（当前预览首行）反显突出
-		if fb.focusRight && idx == start {
+		if fb.FocusRight && idx == start {
 			line = lipgloss.NewStyle().Reverse(true).Render(line)
 		}
 		out = append(out, line)

@@ -1,9 +1,10 @@
-package main
+package core
 
 import (
 	"fmt"
 	"regexp"
 	"strings"
+	"termd"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -27,7 +28,7 @@ import (
 type OutlineItem struct {
 	Level int    // 标题层级 1~6
 	Title string // 标题文本（已去除首尾 # 与空白）
-	Line  int    // 标题所在的 Buffer 行（0-based），用于跳转
+	Line  int    // 标题所在的 termd.Buffer 行（0-based），用于跳转
 }
 
 // atxHeadingRE 匹配 ATX 风格标题：允许最多 3 个前导空格，1~6 个 # 后接空格与标题文本，
@@ -37,19 +38,19 @@ var atxHeadingRE = regexp.MustCompile(`^[ \t]{0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \
 
 // extractOutline 从缓冲区解析所有 markdown 标题，按出现顺序返回。
 // 跳过代码块（``` / ~~~ 围栏）内的 # 行，避免误判。
-func extractOutline(buf *Buffer) []OutlineItem {
-	lines := buf.lines
+func extractOutline(buf *termd.Buffer) []OutlineItem {
+	lines := buf.Lines
 	var items []OutlineItem
 	inFence := false
 	for i, lb := range lines {
 		s := string(lb)
 		trim := strings.TrimSpace(s)
 		// 围栏切换（与 renderPreview 的 isFence* 判定一致）
-		if isFenceStart(trim) {
+		if termd.IsFenceStart(trim) {
 			inFence = true
 			continue
 		}
-		if isFenceEnd(trim) {
+		if termd.IsFenceEnd(trim) {
 			inFence = false
 			continue
 		}
@@ -72,11 +73,11 @@ func extractOutline(buf *Buffer) []OutlineItem {
 }
 
 // outlineWidth 返回大纲列宽度（像素列数）。未开启或文件浏览器打开时为 0。
-func (m *editorModel) outlineWidth() int {
+func (m *EditorModel) outlineWidth() int {
 	if !m.outlineMode {
 		return 0
 	}
-	if m.fb != nil && m.fb.open {
+	if m.fb != nil && m.fb.Opened {
 		return 0 // 与文件浏览器互斥，不缩减内容区
 	}
 	// 用户拖拽设定的宽度优先；否则用自动默认公式。
@@ -113,7 +114,7 @@ func (m *editorModel) outlineWidth() int {
 
 // contentWidth 返回主内容区可用宽度（终端宽减去大纲列宽）。
 // 文件浏览器打开时返回全宽（大纲列不参与布局）。
-func (m *editorModel) contentWidth() int {
+func (m *EditorModel) contentWidth() int {
 	w := m.width - m.outlineWidth()
 	if w < 20 {
 		w = 20
@@ -122,19 +123,19 @@ func (m *editorModel) contentWidth() int {
 }
 
 // toggleOutline 打开/关闭大纲侧边栏；打开时惰性提取大纲并定位高亮项到当前行。
-func (m *editorModel) toggleOutline() {
+func (m *EditorModel) toggleOutline() {
 	// 大纲列宽变化 => 内容区重排，滚动帧冻结缓存失效。
 	m.invalidateScrollRender()
 	if m.outlineMode {
 		m.outlineMode = false
-		m.status = T("已关闭大纲")
+		m.status = termd.T("已关闭大纲")
 		return
 	}
 	m.outlineMode = true
-	m.outlineItems = extractOutline(m.buf)
+	m.outlineItems = extractOutline(m.Buf)
 	// 高亮项定位到当前可见标题（取 <= 当前行的最后一个标题）
 	cur := m.previewCursor
-	if m.sm.Mode() == ModeEdit {
+	if m.sm.Mode() == termd.ModeEdit {
 		cur = m.cursorRow
 	}
 	m.outlineCursor = 0
@@ -145,12 +146,12 @@ func (m *editorModel) toggleOutline() {
 			break
 		}
 	}
-	m.status = Tf("大纲：%d 个标题（j/k 移动，Enter 跳转，Esc 关闭）", len(m.outlineItems))
+	m.status = termd.Tf("大纲：%d 个标题（j/k 移动，Enter 跳转，Esc 关闭）", len(m.outlineItems))
 }
 
 // handleOutlineKey 处理大纲打开时的导航按键。
 // 返回 (model, cmd)；handled 表示是否消费了该按键（true 时由调用方跳过常规处理）。
-func (m *editorModel) handleOutlineKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+func (m *EditorModel) handleOutlineKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+t":
 		m.toggleOutline()
@@ -158,7 +159,7 @@ func (m *editorModel) handleOutlineKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	case "esc":
 		m.outlineMode = false
 		m.invalidateScrollRender() // 内容区恢复全宽
-		m.status = T("已关闭大纲")
+		m.status = termd.T("已关闭大纲")
 		return m, nil, true
 	case "j", "down":
 		if len(m.outlineItems) > 0 {
@@ -176,7 +177,7 @@ func (m *editorModel) handleOutlineKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		m.jumpToOutline(m.outlineCursor)
 		m.outlineMode = false      // 跳转后关闭侧边栏
 		m.invalidateScrollRender() // 内容区恢复全宽
-		m.status = T("已跳转到标题")
+		m.status = termd.T("已跳转到标题")
 		return m, nil, true
 	}
 	// 其余按键不消费，交回常规模式处理（例如 i 进入编辑）
@@ -185,24 +186,24 @@ func (m *editorModel) handleOutlineKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 
 // syncOutlineToContent 把当前高亮大纲项对应的 buffer 行同步到内容区当前行，
 // 实现“目录-正文联动”（不关闭侧边栏）。
-func (m *editorModel) syncOutlineToContent() {
+func (m *EditorModel) syncOutlineToContent() {
 	if m.outlineCursor < 0 || m.outlineCursor >= len(m.outlineItems) {
 		return
 	}
 	line := m.outlineItems[m.outlineCursor].Line
-	if m.sm.Mode() == ModeEdit {
-		m.cursorRow = clamp(line, 0, m.buf.LineCount()-1)
+	if m.sm.Mode() == termd.ModeEdit {
+		m.cursorRow = clamp(line, 0, m.Buf.LineCount()-1)
 		m.cursorCol = 0
 		m.cursWant = 0
 		m.ensureCursorVisible()
 	} else {
-		m.previewCursor = clamp(line, 0, m.buf.LineCount()-1)
+		m.previewCursor = clamp(line, 0, m.Buf.LineCount()-1)
 		m.ensurePreviewCursorVisible()
 	}
 }
 
 // jumpToOutline 跳转到指定大纲项（仅设置行，不关闭侧边栏）。
-func (m *editorModel) jumpToOutline(idx int) {
+func (m *EditorModel) jumpToOutline(idx int) {
 	if idx < 0 || idx >= len(m.outlineItems) {
 		return
 	}
@@ -212,7 +213,7 @@ func (m *editorModel) jumpToOutline(idx int) {
 // renderOutline 渲染左侧大纲列（固定宽 outlineWidth，高度 = 内容区可视行数）。
 // 内容占 outlineWidth()-1 列，最右 1 列留给 composeOutlineWithBody 的分隔线。
 // 返回按行拼接的字符串；每行已用 ANSI 着色，可直接与正文逐行并排。
-func (m *editorModel) renderOutline() string {
+func (m *EditorModel) renderOutline() string {
 	w := m.outlineWidth()
 	if w <= 0 {
 		return ""
@@ -298,7 +299,7 @@ func padRightRunes(s string, width int) string {
 // composeOutlineWithBody 把大纲列、分隔线列与正文逐行并排，返回内容区完整字符串。
 // 大纲列内容宽 = outlineWidth()-1，分隔线 1 列，正文宽 = contentWidth()，
 // 三者之和 = 终端宽，因此并排后总宽与状态栏对齐（状态栏仍由 fixBottom 固定贴底）。
-func (m *editorModel) composeOutlineWithBody(bodyStr string) string {
+func (m *EditorModel) composeOutlineWithBody(bodyStr string) string {
 	ow := m.outlineWidth()
 	if ow <= 0 {
 		return bodyStr

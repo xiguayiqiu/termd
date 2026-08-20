@@ -32,7 +32,7 @@
 ```bash
 git clone <repo-url> termd
 cd termd
-go build -o termd .
+go build -o termd ./cmd/termd
 ```
 
 构建产物为 `termd` 可执行文件。
@@ -214,27 +214,46 @@ set nosmoothscroll
 
 ## 架构概览
 
+项目为**多包结构**（`go build -o termd ./cmd/termd` 构建）：
+
+| 包 | 说明 |
+| --- | --- |
+| 根目录（`package termd`，import 路径 `termd`） | 编辑器基础组件：`Buffer` / `Renderer` / `StateMachine` / `FileBrowser` / `SwapManager`、行内/块级渲染、键位、i18n、recovery、fcitx5、UTF-8 工具 |
+| `core/`（`package core`，import 路径 `termd/core`） | 编辑器模型层 `editorModel`：拆分后的 `model_*.go` 及其紧耦合的滚动/状态栏/鼠标/大纲/rc 配置处理 |
+| `cmd/termd/`（`package main`） | 程序入口：参数解析、i18n 初始化、构造模型、加载 `.termdrc`、启动 bubbletea |
+
+`model.go` 已按功能拆分为多个 `model_*.go`（均位于 `core/`），拆分映射见 `modeln/README.md`。
+
 | 文件 | 职责 |
 | --- | --- |
-| `main.go` | 启动入口：解析命令行参数、初始化 i18n、加载 `.termdrc`、构造并运行 bubbletea 程序 |
-| `model.go` | `editorModel`（核心状态机）、`Update`/`View`/`Init`、Preview 块级重建（`rebuildPreview`）、滚动与行号映射 |
-| `statemachine.go` | 三模式状态机（`ModePreview` / `ModeEdit` / `ModeCommand`）及 Edit 子态、`lineNumMode` 行号模式 |
+| `cmd/termd/main.go` | 启动入口：解析命令行参数、初始化 i18n、加载 `.termdrc`、构造并运行 bubbletea 程序 |
+| `core/model_types.go` | `EditorModel` 结构体、常量、构造、`Init` 及 rune/byte 列换算 |
+| `core/model_update.go` | `Update` 消息分发 |
+| `core/model_edit.go` | Edit 模式按键处理 + 光标移动/删除/滚动辅助 |
+| `core/model_preview.go` | Preview 模式按键处理 + `renderPreview` + 预览光标注入 |
+| `core/model_command.go` | Command 模式按键 + `executeCommand` + `expandPercent`/`loadFile` |
+| `core/model_filebrowser.go` | 文件浏览器按键处理 |
+| `core/model_view.go` | `View`/`fallbackView`/`frameLine` + `renderEdit` |
+| `core/model_rebuild.go` | `rebuildPreview`（block-aware 渲染缓存构建） |
+| `core/model_render_util.go` | 行号/代码块/chroma 高亮等渲染工具 |
+| `core/model_util.go` | `touch`/`contentHeight`/`clamp`/`max`/`min` 等工具 |
+| `statemachine.go` | 三模式状态机（`ModePreview` / `ModeEdit` / `ModeCommand`）及 Edit 子态、`LineNumMode` 行号模式 |
 | `buffer.go` | 行存储缓冲区（`[][]byte`），光标定位、插入/删除、撤销（undo）等编辑操作 |
-| `renderer.go` | 混合渲染策略：单行富文本渲染、光标对齐、软换行（`wrapText`）、CJK 列宽计算、glamour 单行渲染 |
+| `renderer.go` | 混合渲染策略：单行富文本渲染、光标对齐、软换行（`WrapText`）、CJK 列宽计算、glamour 单行渲染 |
 | `markdown_render.go` | 行内语法轻量正则渲染（`RenderInline`）、块级 glamour 渲染（`RenderBlock`）、块级语法识别（代码块/表格/数学块/脚注/定义列表） |
-| `scroll_render.go` | 视觉行滚动（借鉴 glow viewport 模型）：`previewScroll` 视觉行偏移、`editScrollByVisual` 视觉行换算，滚轮/翻页按视觉行步进，内容区增量/全量重绘与清除（`SyncScrollArea` / `ScrollDown` / `ScrollUp` / `ClearScrollArea`） |
-| `statusbar.go` | 状态栏 / 命令栏（底部固定栏）：两段式状态栏（左模式块 / 右标尺块）、命令栏前缀高亮 + 实心光标块 |
 | `keymap.go` | 键盘操作单一事实来源（`DefaultKeyMap`），生成键位/命令帮助视图（`:help` / `:keymap`） |
-| `mouse.go` | 鼠标支持：滚轮翻页（仿 vim `do_mousescroll`，无修饰键 3 行 / Shift/Ctrl 整页）、大纲分隔列拖动调宽（`win_drag_vsep_line`）、链接点击跳转（`openLink`：http(s) / 裸域名补协议浏览器打开、本地路径系统默认程序） |
 | `filebrowser.go` | `:ex` 文件浏览器：两栏布局（左列表 / 右文本预览）、新建/删除/重命名文件与目录、Nerd Font 图标着色 |
-| `outline.go` | Markdown 大纲侧边栏（仿 tagbar / `:Toc`）：`Ctrl+T` 切换、`#`~`######` 标题目录、`j`/`k` 移动高亮联动定位、Enter 跳转锁定 / Esc 关闭、与 `:ex` 互斥 |
 | `image.go` | 图片模块：远程（带缓存、异步）/ 本地（位图 + SVG 光栅化）、Kitty 图形协议 / 半块字符回退均已实现但**未接入渲染主路径**（当前图片显示为 `🖼` 占位符） |
 | `i18n.go` | 中英文国际化（`T` / `Tf`），依据环境变量自动检测语言 |
-| `termdrc.go` | 解析 `~/.termdrc` 持久配置并应用到编辑器 |
 | `fcitx5.go` | Linux fcitx5 输入法适配：焦点报告 + 输入过滤器，避免脏字符污染文本缓冲 |
 | `recovery.go` | 崩溃恢复底层工具：swap 元数据编解码、原子写入（临时文件 + `os.Rename`）、PID/时间戳判定「正常退出 / 崩溃 / 被占用」 |
 | `swap.go` | 后台并发写盘（`SwapManager`）：UI 线程采快照 → channel → 后台线程写 `.swp`，节流防卡 UI、优雅退出删除 `.swp`、崩溃残留供恢复 |
 | `utf8util.go` | UTF-8 rune 编解码薄封装 |
+| `core/scroll_render.go` | 视觉行滚动（借鉴 glow viewport 模型）：`previewScroll` 视觉行偏移、`editScrollByVisual` 视觉行换算，滚轮/翻页按视觉行步进，内容区增量/全量重绘与清除（`SyncScrollArea` / `ScrollDown` / `ScrollUp` / `ClearScrollArea`） |
+| `core/statusbar.go` | 状态栏 / 命令栏（底部固定栏）：两段式状态栏（左模式块 / 右标尺块）、命令栏前缀高亮 + 实心光标块 |
+| `core/mouse.go` | 鼠标支持：滚轮翻页（仿 vim `do_mousescroll`，无修饰键 3 行 / Shift/Ctrl 整页）、大纲分隔列拖动调宽（`win_drag_vsep_line`）、链接点击跳转（`openLink`：http(s) / 裸域名补协议浏览器打开、本地路径系统默认程序） |
+| `core/outline.go` | Markdown 大纲侧边栏（仿 tagbar / `:Toc`）：`Ctrl+T` 切换、`#`~`######` 标题目录、`j`/`k` 移动高亮联动定位、Enter 跳转锁定 / Esc 关闭、与 `:ex` 互斥 |
+| `core/termdrc.go` | 解析 `~/.termdrc` 持久配置并应用到编辑器 |
 
 ### 渲染策略（核心难点）
 
@@ -259,7 +278,7 @@ func main() {
 - **识别方式**：` ```语言名 ```` 围栏内的内容作为代码块整体送 glamour 渲染（chroma 负责高亮）。
 - **支持语言**：约 **250 种**——240 个嵌入式 lexer（移植自 Pygments）+ 数十个手写 lexer，覆盖 Go、Python、Rust、TypeScript、JavaScript、Java、C、C++、C#、Ruby、PHP、Swift、Kotlin、SQL、Bash/Shell、YAML、JSON、HTML、CSS、Markdown、LaTeX、Diff、Dockerfile、Makefile 等主流语言。
 - **匹配规则**（chroma `lexers.Get`）：按 **名称/别名**（如 `golang`→Go、`py`→Python、`cpp`/`c++`→C++、`js`→JavaScript）→ **大小写不敏感**（`GO`、`Python` 均可）→ **扩展名/文件名** 三级匹配。
-- **降级行为**：未匹配到任何语言的标签（如 ` ```text ````、` ```none ````、拼写错误）不会报错，代码块按**纯文本**展示（无颜色），见 `model.go::highlightCode`（`lexers.Fallback`）。
+- **降级行为**：未匹配到任何语言的标签（如 ` ```text ````、` ```none ````、拼写错误）不会报错，代码块按**纯文本**展示（无颜色），见 `core/model_render_util.go::highlightCode`（`lexers.Fallback`）。
 
 ---
 

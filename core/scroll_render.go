@@ -1,4 +1,4 @@
-package main
+package core
 
 // ============================================================
 // scroll_render —— 视觉行滚动（借鉴 glow 的 viewport 模型）
@@ -11,7 +11,7 @@ package main
 //   3. 每帧只输出 lines[yOffset : yOffset+height] 这一可见切片，交给 bubbletea
 //      的逐行 diff 只重绘变化行 —— 不依赖终端滚动区，天然正确、平滑、可回退。
 //
-// 旧实现（DECSTBM + CSI S/T 终端物理滚动 + 冻结帧）会与 bubbletea 的行 diff
+// 旧实现（DECSTBM + CSI S/termd.T 终端物理滚动 + 冻结帧）会与 bubbletea 的行 diff
 // 渲染器失步：终端内容被物理移动而 bubbletea 的屏幕状态不知道，导致内容错位、
 // 光标消失、滚动“跳一大片”。本模块彻底移除该机制，Preview 与 Edit 都改为
 // 视觉行偏移滚动（vim 的 topline / mouse_vert_step 语义）：
@@ -25,6 +25,7 @@ package main
 import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"termd"
 )
 
 // tildeLine 预览/编辑模式文件末尾的占位行（与 renderPreview / renderEdit 的 ~ 样式一致）。
@@ -35,14 +36,14 @@ func tildeLine() string {
 // invalidateScrollRender 内容/宽度变化后调用：使预览视口偏移在下次渲染时按新内容
 // 重新钳制（位置尽量保留，超出新边界时收缩到合法范围）。旧 DECSTBM 滚动帧缓存
 // 已移除，此钩子仅保留钳制语义，供模式切换 / resize / 编辑等路径统一调用。
-func (m *editorModel) invalidateScrollRender() {
+func (m *EditorModel) invalidateScrollRender() {
 	if len(m.previewLines) > 0 {
 		m.clampPreviewScroll()
 	}
 }
 
 // clampPreviewScroll 把 previewScroll 钳制到 [0, max(0, len(previewLines)-ch)]。
-func (m *editorModel) clampPreviewScroll() {
+func (m *EditorModel) clampPreviewScroll() {
 	ch := visibleLines(m)
 	if ch < 1 {
 		ch = 1
@@ -61,7 +62,7 @@ func (m *editorModel) clampPreviewScroll() {
 
 // setPreviewCursorToRow 把 previewCursor 设置为 previewLines[ridx] 对应的 buffer 行。
 // ridx 越界时钳制到最近的有效视觉行；若视觉行落在文末 ~ 占位区，取最后一个真实内容行。
-func (m *editorModel) setPreviewCursorToRow(ridx int) {
+func (m *EditorModel) setPreviewCursorToRow(ridx int) {
 	if len(m.previewRowToBuffer) == 0 {
 		return
 	}
@@ -85,7 +86,7 @@ func (m *editorModel) setPreviewCursorToRow(ridx int) {
 // 滚动区重置（\x1b[r）互相冲突——结果就是鼠标/键盘滚动时内容错位累积（俗称“内容飘逸”）。
 // 彻底弃用物理滚动区后，鼠标与键盘走同一条纯偏移路径，永不与 bubbletea 失步，与
 // Edit 模式的纯偏移渲染（editScrollByVisual）行为完全一致。
-func (m *editorModel) previewScrollByVisual(delta int) tea.Cmd {
+func (m *EditorModel) previewScrollByVisual(delta int) tea.Cmd {
 	if len(m.previewLines) == 0 {
 		return nil
 	}
@@ -126,7 +127,7 @@ func (m *editorModel) previewScrollByVisual(delta int) tea.Cmd {
 }
 
 // previewVisibleRows 返回当前 previewScroll 下内容区的可视行（恰好 ch 行，末尾用 ~ 补齐）。
-func (m *editorModel) previewVisibleRows(ch int) []string {
+func (m *EditorModel) previewVisibleRows(ch int) []string {
 	rows := make([]string, 0, ch)
 	for i := m.previewScroll; i < m.previewScroll+ch && i < len(m.previewLines); i++ {
 		rows = append(rows, m.previewLines[i])
@@ -141,7 +142,7 @@ func (m *editorModel) previewVisibleRows(ch int) []string {
 // 之后的滚动用 ScrollDown/ScrollUp 增量，物理移动内容行，避免整屏重绘闪烁）。
 // 边界约定：top=0, bottom=contentHeight（0-based View 行，同时被 renderer 用作
 // ignored 行范围；DECSTBM 侧 0 等价于第 1 行，恰好覆盖内容区）。
-func (m *editorModel) initScrollRegionCmd() tea.Cmd {
+func (m *EditorModel) initScrollRegionCmd() tea.Cmd {
 	ch := m.contentHeight()
 	if ch < 1 || len(m.previewLines) == 0 {
 		return nil
@@ -155,7 +156,7 @@ func (m *editorModel) initScrollRegionCmd() tea.Cmd {
 // incrementalScrollCmd 生成内容区滚动序列：视口移动了 shift 个视觉行。
 //   - 连续小滚动（|shift| < ch 且前后内容连续）→ ScrollDown/ScrollUp 增量；
 //   - 大跳变 / 内容已变（连续性检查失败）→ SyncScrollArea 全量重绘内容区一次。
-func (m *editorModel) incrementalScrollCmd(shift int) tea.Cmd {
+func (m *EditorModel) incrementalScrollCmd(shift int) tea.Cmd {
 	if !m.scrollActive || shift == 0 {
 		return nil
 	}
@@ -197,7 +198,7 @@ func (m *editorModel) incrementalScrollCmd(shift int) tea.Cmd {
 // clearScrollRegionCmd 清除内容区终端滚动区，把内容区渲染交还给 bubbletea。
 // 用于：进入编辑/命令模式、开关大纲、resize、光标块独立移动（j/k）等场景。
 // 注意 ClearScrollArea() 返回 Msg 而非 Cmd，需包一层。
-func (m *editorModel) clearScrollRegionCmd() tea.Cmd {
+func (m *EditorModel) clearScrollRegionCmd() tea.Cmd {
 	if !m.scrollActive {
 		return nil
 	}
@@ -207,7 +208,7 @@ func (m *editorModel) clearScrollRegionCmd() tea.Cmd {
 }
 
 // centerPreviewOnCursor 把视口居中定位到当前光标行（仿 vim zz，用于 :数字 / /搜索 跳转）。
-func (m *editorModel) centerPreviewOnCursor() {
+func (m *EditorModel) centerPreviewOnCursor() {
 	if m.previewDirty {
 		// 预览缓存可能尚未构建（如刚打开文件就执行 :数字 跳转）：先重建
 		m.rebuildPreview()
@@ -227,11 +228,11 @@ func (m *editorModel) centerPreviewOnCursor() {
 	m.previewScroll = clamp(crow-ch/2, 0, max(0, len(m.previewLines)-ch))
 }
 
-// ---- Edit 模式视觉行工具（wrapText 口径与 renderEdit / ensureCursorVisible 一致）----
+// ---- Edit 模式视觉行工具（termd.WrapText 口径与 renderEdit / ensureCursorVisible 一致）----
 
 // editVisualHeight 返回第 i 个 buffer 行渲染后的视觉行数（软换行后，至少 1）。
-func (m *editorModel) editVisualHeight(i int) int {
-	n := len(wrapText(string(m.buf.GetLine(i)), m.editAvailWidth()))
+func (m *EditorModel) editVisualHeight(i int) int {
+	n := len(termd.WrapText(string(m.Buf.GetLine(i)), m.editAvailWidth()))
 	if n < 1 {
 		n = 1
 	}
@@ -239,7 +240,7 @@ func (m *editorModel) editVisualHeight(i int) int {
 }
 
 // editVisTotal 返回 [from, to) 区间 buffer 行的视觉行数总和。
-func (m *editorModel) editVisTotal(from, to int) int {
+func (m *EditorModel) editVisTotal(from, to int) int {
 	acc := 0
 	for i := from; i < to; i++ {
 		acc += m.editVisualHeight(i)
@@ -249,8 +250,8 @@ func (m *editorModel) editVisTotal(from, to int) int {
 
 // editBufferLineAtVisual 返回从 top 行起视觉偏移 off（0-based）所在的 buffer 行；
 // off 超出内容末尾时返回最后一个有内容的 buffer 行。
-func (m *editorModel) editBufferLineAtVisual(top, off int) int {
-	n := m.buf.LineCount()
+func (m *EditorModel) editBufferLineAtVisual(top, off int) int {
+	n := m.Buf.LineCount()
 	if n == 0 {
 		return 0
 	}
@@ -273,8 +274,8 @@ func (m *editorModel) editBufferLineAtVisual(top, off int) int {
 
 // editBottomTopline 返回使窗口底部恰好贴住内容末尾的 topline（视口至少显示 ch 个
 // 视觉行；内容不足 ch 时返回 0，由 ~ 占位填充）。用于滚轮触底时对齐底部（仿 vim）。
-func (m *editorModel) editBottomTopline(ch int) int {
-	n := m.buf.LineCount()
+func (m *EditorModel) editBottomTopline(ch int) int {
+	n := m.Buf.LineCount()
 	if n == 0 {
 		return 0
 	}
@@ -298,8 +299,8 @@ func (m *editorModel) editBottomTopline(ch int) int {
 //   - 视口整体移动 delta 个视觉行；
 //   - 光标保持在同一内容上（屏幕行随内容同步位移，越界钳制到窗口首/末行）；
 //   - delta>0 且超出文末时，视口底部对齐内容末尾（vim 触底行为）。
-func (m *editorModel) editScrollByVisual(delta int) {
-	n := m.buf.LineCount()
+func (m *EditorModel) editScrollByVisual(delta int) {
+	n := m.Buf.LineCount()
 	ch := visibleLines(m)
 	if ch < 1 || n == 0 {
 		return

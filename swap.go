@@ -1,4 +1,4 @@
-package main
+package termd
 
 // ============================================================
 // swap —— 后台并发写盘（SwapManager）
@@ -172,7 +172,7 @@ func (sm *SwapManager) Stop() {
 	_ = RemoveSwapFile(sm.swapPath)
 }
 
-// swapPathFor 由正文文件路径推导 .swp 路径（同目录 + ".swp" 后缀，仿 vim）。
-func swapPathFor(filePath string) string {
+// SwapPathFor 由正文文件路径推导 .swp 路径（同目录 + ".swp" 后缀，仿 vim）。
+func SwapPathFor(filePath string) string {
 	return filePath + ".swp"
 }

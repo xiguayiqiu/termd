@@ -1,4 +1,4 @@
-package main
+package termd
 
 import (
 	"github.com/charmbracelet/bubbletea"
@@ -23,7 +23,7 @@ import (
 //      作为终极兜底，在进入 model.Update 之前清洗 KeyMsg 中可能混入的
 //      ANSI/CSI 控制字节（如残留的 \x1b 引导序列、不可打印控制字符），
 //      避免任何脏字符被写入文本缓冲。同时把 IME 激活/反激活状态通过
-//      fcitx5IMEMsg 转发给 model，供其在输入法激活期做额外规避。
+//      Fcitx5IMEMsg 转发给 model，供其在输入法激活期做额外规避。
 //
 // 用法（见 main.go）：
 //   p := tea.NewProgram(model, append(
@@ -31,9 +31,9 @@ import (
 //       WithFcitx5()...,
 //   )...)
 
-// fcitx5IMEMsg 在输入法“进入/离开”时由过滤器转发给 model，
+// Fcitx5IMEMsg 在输入法“进入/离开”时由过滤器转发给 model，
 // 便于 UI 在 IME 激活态做规避（如禁用依赖裸字符的快捷键）。
-type fcitx5IMEMsg struct{ Active bool }
+type Fcitx5IMEMsg struct{ Active bool }
 
 // WithFcitx5 返回适配 fcitx5 所需的 bubbletea 启动选项集合。
 // 关键项：
@@ -50,10 +50,11 @@ func WithFcitx5() []tea.ProgramOption {
 
 // fcitx5InputFilter 是 bubbletea 的输入过滤器（Middleware）。
 // 在每条消息进入 model.Update 之前执行：
-//   - FocusMsg  → 转发 fcitx5IMEMsg{Active:true}（输入法激活）
-//   - BlurMsg   → 转发 fcitx5IMEMsg{Active:false}（输入法反激活）
+//   - FocusMsg  → 转发 Fcitx5IMEMsg{Active:true}（输入法激活）
+//   - BlurMsg   → 转发 Fcitx5IMEMsg{Active:false}（输入法反激活）
 //   - KeyMsg    → 清洗其中可能混入的 CSI/ANSI 控制字节与不可打印字符，
 //     剥离掉脏字符后若仍有可读字符才继续，否则丢弃该消息。
+//
 // msgCmd 将一个消息包成 tea.Cmd（用于 tea.Batch 同时转发多条消息）。
 func msgCmd(m tea.Msg) tea.Cmd {
 	return func() tea.Msg { return m }
@@ -63,9 +64,9 @@ func fcitx5InputFilter(_ tea.Model, msg tea.Msg) tea.Msg {
 	switch mm := msg.(type) {
 	case tea.FocusMsg:
 		// 输入法激活：先让框架自身的 Focus 事件通过，再补一条 IME 状态消息。
-		return tea.Batch(msgCmd(mm), msgCmd(fcitx5IMEMsg{Active: true}))
+		return tea.Batch(msgCmd(mm), msgCmd(Fcitx5IMEMsg{Active: true}))
 	case tea.BlurMsg:
-		return tea.Batch(msgCmd(mm), msgCmd(fcitx5IMEMsg{Active: false}))
+		return tea.Batch(msgCmd(mm), msgCmd(Fcitx5IMEMsg{Active: false}))
 	case tea.KeyMsg:
 		cleaned, ok := sanitizeKeyRunes(mm)
 		if !ok {

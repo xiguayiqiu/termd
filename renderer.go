@@ -1,4 +1,4 @@
-package main
+package termd
 
 import (
 	"bytes"
@@ -52,7 +52,7 @@ type Renderer struct {
 	// termenv 配置文件（用于检测终端颜色能力）
 	profile termenv.Profile
 	// 样式集合（用 lipgloss 描述各类元素的视觉）
-	styles Styles
+	Styles Styles
 	// 复用的 glamour TermRenderer（Preview 模式单行渲染使用）
 	gRenderer *glamour.TermRenderer
 	// glamour 渲染宽度（终端宽度 - 行号前缀宽度）
@@ -138,7 +138,7 @@ func (r *Renderer) SetProfile(p termenv.Profile) {
 
 // initStyles 定义各类 Markdown 元素的视觉表现。
 func (r *Renderer) initStyles() {
-	r.styles = Styles{
+	r.Styles = Styles{
 		H1:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Underline(true),
 		H2:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("200")),
 		H3:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99")),
@@ -164,13 +164,13 @@ func (r *Renderer) IsMarkdownLine(line []byte) bool {
 		return false
 	}
 	trimmed := strings.TrimLeft(s, " \t")
-	return mdRE.MatchString(trimmed) || blockStartRE.MatchString(trimmed) || inlineMDRE.MatchString(trimmed) || isDefListLine(trimmed)
+	return mdRE.MatchString(trimmed) || blockStartRE.MatchString(trimmed) || inlineMDRE.MatchString(trimmed) || IsDefListLine(trimmed)
 }
 
-// cellWidth 返回单个 rune 在终端中的显示列宽（仿 vim 的 char2cells）。
+// CellWidth 返回单个 rune 在终端中的显示列宽（仿 vim 的 char2cells）。
 // 东亚全角/宽字符占 2 列；制表符按 8 列对齐近似处理；其余占 1 列。
 // ANSI 转义序列本身零宽，由 skipANSI 单独跳过。
-func cellWidth(r rune) int {
+func CellWidth(r rune) int {
 	switch {
 	case r == '\t':
 		return 8
@@ -235,7 +235,7 @@ func isResetSeq(seq string) bool {
 	return seq == "\x1b[0m" || seq == "\x1b[m"
 }
 
-// wrapText 把一段（可能含 ANSI 转义的）文本软换行到 maxWidth 列以内，
+// WrapText 把一段（可能含 ANSI 转义的）文本软换行到 maxWidth 列以内，
 // 返回按 "\n" 连接的多个物理行。策略：
 //   - 仅在空格处断行（词软换行），实现类 vim 'wrap' 的可读折行；
 //   - 单个“词”超过 maxWidth 时硬断行（避免超宽溢出终端）；
@@ -243,8 +243,8 @@ func isResetSeq(seq string) bool {
 //     末尾补复位符、并在续行开头重开该样式，保证每行 ANSI 完全自洽（无色偏/污点）；
 //   - 列宽按终端单元格计算（东亚宽字符占 2 列），与 lipgloss.Width 一致。
 //
-// 调用方负责在续行上拼接 gutter（行号占位），wrapText 只产出“纯内容行”。
-func wrapText(s string, maxWidth int) []string {
+// 调用方负责在续行上拼接 gutter（行号占位），WrapText 只产出“纯内容行”。
+func WrapText(s string, maxWidth int) []string {
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
@@ -291,7 +291,7 @@ func wrapText(s string, maxWidth int) []string {
 			continue
 		}
 		r := runes[i]
-		w := cellWidth(r)
+		w := CellWidth(r)
 		if r == '\n' {
 			// 原文自带换行（如标题下划线）：强制断行并开启新物理行，
 			// 由调用方的续行 gutter 逻辑负责对齐；不写入该换行符本身。
@@ -461,7 +461,7 @@ func runeColToDisp(s string, col int) int {
 		if i >= col {
 			break
 		}
-		d += cellWidth(r)
+		d += CellWidth(r)
 		i++
 	}
 	return d
@@ -526,7 +526,7 @@ func injectCursorBlock(s string, dispCol int) string {
 		}
 		r := runes[i]
 		w := 1
-		if fbDisplayWidth(string(r)) >= 2 {
+		if FBDisplayWidth(string(r)) >= 2 {
 			w = 2
 		}
 		if dispCol < col+w {
@@ -612,17 +612,17 @@ func (r *Renderer) renderStyledLine(s string, highlight string) string {
 			var h lipgloss.Style
 			switch level {
 			case 1:
-				h = r.styles.H1
+				h = r.Styles.H1
 			case 2:
-				h = r.styles.H2
+				h = r.Styles.H2
 			case 3:
-				h = r.styles.H3
+				h = r.Styles.H3
 			case 4:
-				h = r.styles.H4
+				h = r.Styles.H4
 			case 5:
-				h = r.styles.H5
+				h = r.Styles.H5
 			default:
-				h = r.styles.H6
+				h = r.Styles.H6
 			}
 			prefix := h.Render(fmt.Sprintf("H%d ", level))
 			// 顶两级的标题在其下方补一条强调线，使“呈现”更明显；
@@ -632,13 +632,13 @@ func (r *Renderer) renderStyledLine(s string, highlight string) string {
 				if ruleLen <= 0 {
 					ruleLen = 4 + utf8RuneCount(content)
 				}
-				content = prefix + h.Render(RenderInline(content)) + "\n" + indent + r.styles.Dim.Render(strings.Repeat("─", ruleLen))
+				content = prefix + h.Render(RenderInline(content)) + "\n" + indent + r.Styles.Dim.Render(strings.Repeat("─", ruleLen))
 			} else {
 				content = prefix + h.Render(RenderInline(content))
 			}
 			return indent + content
 		}
-		return indent + r.styles.H3.Render(trimmed)
+		return indent + r.Styles.H3.Render(trimmed)
 	case strings.HasPrefix(trimmed, ">") || strings.HasPrefix(trimmed, "> "):
 		// 嵌套引用：统计连续的 '>' 层级，逐层渲染为 '| ' 标记（ASCII，保证任意
 		// 终端/中文 locale 下恒为 1 列，避免 U+2502 变宽撑破行宽），
@@ -672,39 +672,39 @@ func (r *Renderer) renderStyledLine(s string, highlight string) string {
 		if rest == "" {
 			return indent + markers
 		}
-		return indent + markers + r.styles.Quote.Render(RenderInline(rest))
+		return indent + markers + r.Styles.Quote.Render(RenderInline(rest))
 	case strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~"):
-		return indent + r.styles.CodeBg.Render(trimmed)
+		return indent + r.Styles.CodeBg.Render(trimmed)
 	case strings.HasPrefix(trimmed, "- [ ] ") || strings.HasPrefix(trimmed, "* [ ] "):
-		return indent + r.styles.Task.Render("[ ] "+RenderInline(trimmed[6:]))
+		return indent + r.Styles.Task.Render("[ ] "+RenderInline(trimmed[6:]))
 	case strings.HasPrefix(trimmed, "- [x] ") || strings.HasPrefix(trimmed, "* [x] "):
-		return indent + r.styles.Task.Render("[x] "+RenderInline(trimmed[6:]))
+		return indent + r.Styles.Task.Render("[x] "+RenderInline(trimmed[6:]))
 	case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
 		lvl := indentLevel(indent)
-		return indent + r.styles.List.Render(listBullet(lvl)+" "+RenderInline(trimmed[2:]))
+		return indent + r.Styles.List.Render(listBullet(lvl)+" "+RenderInline(trimmed[2:]))
 	case strings.HasPrefix(trimmed, "+ "):
 		lvl := indentLevel(indent)
-		return indent + r.styles.List.Render(listBullet(lvl)+" "+RenderInline(trimmed[2:]))
+		return indent + r.Styles.List.Render(listBullet(lvl)+" "+RenderInline(trimmed[2:]))
 	case isOrderedList(trimmed):
 		// 有序列表：保留 "1. " 序号，内容渲染行内语法
 		idx := strings.Index(trimmed, ". ")
-		return indent + r.styles.List.Render(trimmed[:idx+2]+RenderInline(trimmed[idx+2:]))
+		return indent + r.Styles.List.Render(trimmed[:idx+2]+RenderInline(trimmed[idx+2:]))
 	case isInlineCode(trimmed):
 		// 整行被反引号包裹：作为代码展示
-		return indent + r.styles.CodeBg.Render(trimmed)
+		return indent + r.Styles.CodeBg.Render(trimmed)
 	case isHR(trimmed):
 		// 分隔线：用一条横线呈现，长度占满可用宽度（未设置时退化为定长）
 		ruleLen := r.wrap
 		if ruleLen <= 0 {
 			ruleLen = 20
 		}
-		return indent + r.styles.Dim.Render(strings.Repeat("─", ruleLen))
+		return indent + r.Styles.Dim.Render(strings.Repeat("─", ruleLen))
 	case isFootnoteDef(trimmed):
 		// 脚注定义 [^id]: 文本
-		return indent + r.styles.Quote.Render(trimmed)
-	case isDefListLine(trimmed):
+		return indent + r.Styles.Quote.Render(trimmed)
+	case IsDefListLine(trimmed):
 		// 定义列表定义行 : term —— 以 ▸ 标记呈现，并对内容渲染行内语法
-		return indent + r.styles.List.Render("▸ "+RenderInline(trimmed[2:]))
+		return indent + r.Styles.List.Render("▸ "+RenderInline(trimmed[2:]))
 	default:
 		// 普通段落行：渲染行内语法（粗体/斜体/链接/emoji 等）
 		return r.applyHighlight(RenderInline(s), highlight)

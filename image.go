@@ -1,4 +1,4 @@
-package main
+package termd
 
 import (
 	"bytes"
@@ -49,6 +49,7 @@ var imgHTTPClient = &http.Client{Timeout: 10 * time.Second}
 // imgCellAspect 终端单元格「高/宽」比例，用于计算图片渲染的纵向行数，保证 1:1 不压缩。
 //   - 取值 1.0：每个单元格纵向代表 1 个源像素（1:1，适合单元格接近正方形或希望图片不被纵向压扁的终端）。
 //   - 取值 2.0：经典终端（单元格高约为宽 2 倍）下用半块 ▀ 时的正确比例。
+//
 // 若你的预览图片看起来被纵向压扁，将它调小（如 1.0）；若被纵向拉伸，调大（如 2.0）。
 var imgCellAspect float64 = 1.0
 
@@ -147,9 +148,10 @@ func kittyTransmitString(id int, data []byte) string {
 
 // renderImageKitty 使用 Kitty 图形协议渲染：每行对应图片的一行占位。
 //   - 第 0 行：上传（每次重建都重新上传，确保 bubbletea 全屏重绘时图片数据始终在场）
-//     + 放置（a=p），并带 C=1 使放置后光标不自动移动，完全交由我们显式的换行控制。
+//   - 放置（a=p），并带 C=1 使放置后光标不自动移动，完全交由我们显式的换行控制。
 //   - 其余行：与图片等宽的空格占位（cols 个空格），占住图片在字符网格中的列宽，
 //     避免重绘时光标列漂移导致图片错位。
+//
 // 返回 rows 行字符串（不含结尾换行），整体交由 bubbletea 的 View 统一输出。
 func renderImageKitty(img image.Image, src string, cols, rows int) []string {
 	id := kittyID(src)
@@ -202,12 +204,12 @@ func loadImageBytes(src string) ([]byte, error) {
 			return data, nil
 		}
 		// 下载
-	req, err := http.NewRequest(http.MethodGet, src, nil)
-	if err != nil {
-		return nil, err
-	}
-	// 部分图床（如 Wikimedia）要求带 User-Agent，否则返回 403
-	req.Header.Set("User-Agent", "termd/1.0 (+https://github.com/termd/termd)")
+		req, err := http.NewRequest(http.MethodGet, src, nil)
+		if err != nil {
+			return nil, err
+		}
+		// 部分图床（如 Wikimedia）要求带 User-Agent，否则返回 403
+		req.Header.Set("User-Agent", "termd/1.0 (+https://github.com/termd/termd)")
 		resp, err := imgHTTPClient.Do(req)
 		if err != nil {
 			return nil, err
@@ -268,8 +270,8 @@ func rasterizeSVG(data []byte) (image.Image, error) {
 	return rgba, nil
 }
 
-// imgReadyMsg 在后台图片加载完成后由 tea.Send 发出，通知 model 重新渲染 Preview（异步、非阻塞）。
-type imgReadyMsg struct{}
+// ImgReadyMsg 在后台图片加载完成后由 tea.Send 发出，通知 model 重新渲染 Preview（异步、非阻塞）。
+type ImgReadyMsg struct{}
 
 // IsImageLoading 报告某 src 是否正在后台加载中（远程图片未下载完时为真）。
 // 供 Preview 文本占位区分「加载中」与「加载失败」。
@@ -280,12 +282,14 @@ func IsImageLoading(src string) bool {
 // LoadImageAsync 非阻塞地加载图片。
 //   - 返回 (img, true) 表示已同步可用（命中内存缓存 / 本地文件 / 本次就已完成），调用方可立即渲染。
 //   - 返回 (nil, false) 表示图片尚在后台加载（通常是远程 URL），调用方应改用轻量文本占位；
-//     加载完成后会写入内存缓存并由 tea.Send(imgReadyMsg{}) 触发一次重绘，下一次渲染即可拿到图片。
+//     加载完成后会写入内存缓存并由 tea.Send(ImgReadyMsg{}) 触发一次重绘，下一次渲染即可拿到图片。
+//
 // 这样 Preview 渲染在 View() 中绝不会因网络下载而阻塞主事件循环（避免光标冻结/卡死）。
 // LoadImageAsync 非阻塞地加载图片。
 //   - 返回 (img, true) 表示已同步可用（命中内存缓存 / 本地文件 / 本次就已完成），调用方可立即渲染。
 //   - 返回 (nil, false) 表示图片尚在后台加载（通常是远程 URL），调用方应改用轻量文本占位；
 //     加载完成后会写入内存缓存并调用 notify() 触发一次重绘，下一次渲染即可拿到图片。
+//
 // notify 由调用方传入（通常注入 bubbletea 的 Program.Send），用于后台完成时通知重绘；可为 nil。
 // 这样 Preview 渲染在 View() 中绝不会因网络下载而阻塞主事件循环（避免光标冻结/卡死）。
 func LoadImageAsync(src string, notify func()) (image.Image, bool) {
@@ -475,9 +479,9 @@ func ansi256(r, g, b uint32) int {
 	return 16 + 36*ri + 6*gi + bi
 }
 
-// extractBlockImage 从独占一行的文本中提取图片 (alt, url)。
+// ExtractBlockImage 从独占一行的文本中提取图片 (alt, url)。
 // 支持 ![alt](url) 与 [![alt](url)](link) 两种形式。
-func extractBlockImage(trimmed string) (alt, url string, ok bool) {
+func ExtractBlockImage(trimmed string) (alt, url string, ok bool) {
 	if m := reStandaloneImage.FindStringSubmatch(trimmed); m != nil {
 		return m[1], m[2], true
 	}

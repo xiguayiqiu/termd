@@ -1,4 +1,4 @@
-package main
+package termd
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 //   - 内建一个简单的操作历史栈（undo stack），用于 :u 撤销。
 type Buffer struct {
 	// lines 每行内容（不包含末尾换行符）
-	lines [][]byte
+	Lines [][]byte
 	// IsDirty 标记内容是否被修改过（决定是否需要重绘/是否允许 :q 未保存退出）
 	IsDirty bool
 	// filePath 关联的磁盘文件路径（为空表示新建未命名文件）
@@ -29,7 +29,7 @@ type Buffer struct {
 // NewBuffer 创建一个空缓冲区。
 func NewBuffer() *Buffer {
 	return &Buffer{
-		lines:     make([][]byte, 1), // 至少包含一行空行，便于立即输入
+		Lines:     make([][]byte, 1), // 至少包含一行空行，便于立即输入
 		IsDirty:   false,
 		undoStack: make([][][]byte, 0, 64),
 	}
@@ -43,19 +43,19 @@ func (b *Buffer) LoadFile(path string) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// 文件不存在 => 视为新建，初始化为一行空内容即可
-			b.lines = make([][]byte, 1)
+			b.Lines = make([][]byte, 1)
 			b.IsDirty = false
 			return nil
 		}
 		return err
 	}
-	b.lines = bytes.Split(data, []byte{'\n'})
+	b.Lines = bytes.Split(data, []byte{'\n'})
 	// 去掉可能的末尾空行噪音（当文件以 \n 结尾时 Split 会多出一个空切片）
-	if len(b.lines) > 0 && len(b.lines[len(b.lines)-1]) == 0 {
-		b.lines = b.lines[:len(b.lines)-1]
+	if len(b.Lines) > 0 && len(b.Lines[len(b.Lines)-1]) == 0 {
+		b.Lines = b.Lines[:len(b.Lines)-1]
 	}
-	if len(b.lines) == 0 {
-		b.lines = make([][]byte, 1)
+	if len(b.Lines) == 0 {
+		b.Lines = make([][]byte, 1)
 	}
 	b.IsDirty = false
 	return nil
@@ -90,7 +90,7 @@ func (b *Buffer) markChanged() {
 // 若目标文件不存在则自动创建（包括多级目录由调用方保证存在），符合“保存即创建”语义。
 func (b *Buffer) writeTo(path string) error {
 	var buf bytes.Buffer
-	for i, line := range b.lines {
+	for i, line := range b.Lines {
 		if i > 0 {
 			buf.WriteByte('\n')
 		}
@@ -134,20 +134,20 @@ func (b *Buffer) SaveAs(path string) error {
 }
 
 // LineCount 返回总行数。
-func (b *Buffer) LineCount() int { return len(b.lines) }
+func (b *Buffer) LineCount() int { return len(b.Lines) }
 
 // GetLine 获取指定行（越界返回空切片）。
 func (b *Buffer) GetLine(row int) []byte {
-	if row < 0 || row >= len(b.lines) {
+	if row < 0 || row >= len(b.Lines) {
 		return nil
 	}
-	return b.lines[row]
+	return b.Lines[row]
 }
 
 // snapshot 拷贝当前所有行，用于撤销栈。
 func (b *Buffer) snapshot() [][]byte {
-	cp := make([][]byte, len(b.lines))
-	for i, ln := range b.lines {
+	cp := make([][]byte, len(b.Lines))
+	for i, ln := range b.Lines {
 		row := make([]byte, len(ln))
 		copy(row, ln)
 		cp[i] = row
@@ -171,17 +171,17 @@ func (b *Buffer) Undo() bool {
 	}
 	last := b.undoStack[len(b.undoStack)-1]
 	b.undoStack = b.undoStack[:len(b.undoStack)-1]
-	b.lines = last
+	b.Lines = last
 	b.markChanged()
 	return true
 }
 
 // InsertRune 在 (row, col) 处插入一个 rune。越界自动钳制。
 func (b *Buffer) InsertRune(row, col int, r rune) {
-	if row < 0 || row >= len(b.lines) {
-		row = len(b.lines) - 1
+	if row < 0 || row >= len(b.Lines) {
+		row = len(b.Lines) - 1
 	}
-	line := b.lines[row]
+	line := b.Lines[row]
 	if col < 0 {
 		col = 0
 	}
@@ -196,23 +196,23 @@ func (b *Buffer) InsertRune(row, col int, r rune) {
 	n := encodeRune(r, rb[:])
 	newline = append(newline, rb[:n]...)
 	newline = append(newline, line[col:]...)
-	b.lines[row] = newline
+	b.Lines[row] = newline
 	b.markChanged()
 }
 
 // DeleteRune 删除 (row, col) 处的字符（向后删除）。返回是否真删除了内容。
 func (b *Buffer) DeleteRune(row, col int) bool {
-	if row < 0 || row >= len(b.lines) {
+	if row < 0 || row >= len(b.Lines) {
 		return false
 	}
-	line := b.lines[row]
+	line := b.Lines[row]
 	if col < 0 || col >= len(line) {
 		return false
 	}
 	b.pushUndo()
 	// 计算该位置第一个 rune 的字节长度，按 rune 删除而非按字节
-	_, size := decodeRune(line[col:])
-	b.lines[row] = append(line[:col], line[col+size:]...)
+	_, size := DecodeRune(line[col:])
+	b.Lines[row] = append(line[:col], line[col+size:]...)
 	b.markChanged()
 	return true
 }
@@ -220,10 +220,10 @@ func (b *Buffer) DeleteRune(row, col int) bool {
 // Backspace 在 (row, col) 处向前删除一个字符。
 // 若 col==0 且不在首行，则合并到上一行（行拼接）。
 func (b *Buffer) Backspace(row, col int) bool {
-	if row < 0 || row >= len(b.lines) {
+	if row < 0 || row >= len(b.Lines) {
 		return false
 	}
-	line := b.lines[row]
+	line := b.Lines[row]
 	// 钳制字节列，避免光标越界；光标最多在行尾（col==len(line)）
 	if col > len(line) {
 		col = len(line)
@@ -239,20 +239,20 @@ func (b *Buffer) Backspace(row, col int) bool {
 		for start > 0 && !utf8RuneStart(line[start]) {
 			start--
 		}
-		b.lines[row] = append(line[:start], line[col:]...)
+		b.Lines[row] = append(line[:start], line[col:]...)
 		b.markChanged()
 		return true
 	}
 	// 行首退格 => 合并到上一行
 	if row > 0 {
 		b.pushUndo()
-		prev := b.lines[row-1]
-		cur := b.lines[row]
+		prev := b.Lines[row-1]
+		cur := b.Lines[row]
 		merged := make([]byte, 0, len(prev)+len(cur))
 		merged = append(merged, prev...)
 		merged = append(merged, cur...)
-		b.lines[row-1] = merged
-		b.lines = append(b.lines[:row], b.lines[row+1:]...)
+		b.Lines[row-1] = merged
+		b.Lines = append(b.Lines[:row], b.Lines[row+1:]...)
 		b.markChanged()
 		return true
 	}
@@ -261,10 +261,10 @@ func (b *Buffer) Backspace(row, col int) bool {
 
 // InsertNewline 在 (row, col) 处换行：当前行拆分为两行。
 func (b *Buffer) InsertNewline(row, col int) (int, int) {
-	if row < 0 || row >= len(b.lines) {
-		row = len(b.lines) - 1
+	if row < 0 || row >= len(b.Lines) {
+		row = len(b.Lines) - 1
 	}
-	line := b.lines[row]
+	line := b.Lines[row]
 	if col < 0 {
 		col = 0
 	}
@@ -276,57 +276,57 @@ func (b *Buffer) InsertNewline(row, col int) (int, int) {
 	copy(head, line[:col])
 	tail := make([]byte, len(line)-col)
 	copy(tail, line[col:])
-	b.lines[row] = head
-	b.lines = append(b.lines[:row+1], append([][]byte{tail}, b.lines[row+1:]...)...)
+	b.Lines[row] = head
+	b.Lines = append(b.Lines[:row+1], append([][]byte{tail}, b.Lines[row+1:]...)...)
 	b.markChanged()
 	return row + 1, 0
 }
 
 // SetLine 整行替换（搜索替换 / 外部修改时使用）。
 func (b *Buffer) SetLine(row int, content []byte) {
-	if row < 0 || row >= len(b.lines) {
+	if row < 0 || row >= len(b.Lines) {
 		return
 	}
 	b.pushUndo()
-	b.lines[row] = append([]byte(nil), content...)
+	b.Lines[row] = append([]byte(nil), content...)
 	b.markChanged()
 }
 
 // DeleteLine 删除指定行（用于 vim 'dd'）。保证删除后至少保留一行空行。
 func (b *Buffer) DeleteLine(row int) {
-	if row < 0 || row >= len(b.lines) {
+	if row < 0 || row >= len(b.Lines) {
 		return
 	}
 	b.pushUndo()
-	b.lines = append(b.lines[:row], b.lines[row+1:]...)
-	if len(b.lines) == 0 {
-		b.lines = make([][]byte, 1)
+	b.Lines = append(b.Lines[:row], b.Lines[row+1:]...)
+	if len(b.Lines) == 0 {
+		b.Lines = make([][]byte, 1)
 	}
 	b.markChanged()
 }
 
 // OpenLineBelow 在 row 行之后插入一个空行，返回新空行的索引（仿 vim 'o'）。
 func (b *Buffer) OpenLineBelow(row int) int {
-	if row < 0 || row >= len(b.lines) {
-		row = len(b.lines) - 1
+	if row < 0 || row >= len(b.Lines) {
+		row = len(b.Lines) - 1
 	}
 	b.pushUndo()
-	tail := make([][]byte, len(b.lines[row+1:]))
-	copy(tail, b.lines[row+1:])
-	b.lines = append(b.lines[:row+1], append([][]byte{{}}, tail...)...)
+	tail := make([][]byte, len(b.Lines[row+1:]))
+	copy(tail, b.Lines[row+1:])
+	b.Lines = append(b.Lines[:row+1], append([][]byte{{}}, tail...)...)
 	b.markChanged()
 	return row + 1
 }
 
 // OpenLineAbove 在 row 行之前插入一个空行，返回新空行的索引（仿 vim 'O'）。
 func (b *Buffer) OpenLineAbove(row int) int {
-	if row < 0 || row >= len(b.lines) {
+	if row < 0 || row >= len(b.Lines) {
 		row = 0
 	}
 	b.pushUndo()
-	tail := make([][]byte, len(b.lines[row:]))
-	copy(tail, b.lines[row:])
-	b.lines = append(b.lines[:row], append([][]byte{{}}, tail...)...)
+	tail := make([][]byte, len(b.Lines[row:]))
+	copy(tail, b.Lines[row:])
+	b.Lines = append(b.Lines[:row], append([][]byte{{}}, tail...)...)
 	b.markChanged()
 	return row
 }

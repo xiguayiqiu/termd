@@ -1,10 +1,11 @@
-package main
+package core
 
 import (
 	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
+	"termd"
 )
 
 // TermdConfig 保存从 ~/.termdrc 读取的持久化用户配置。
@@ -12,7 +13,7 @@ import (
 // 永久生效，无需每次手动输入 :set 命令。
 type TermdConfig struct {
 	// LineNum 行号显示模式（与运行时 :set nu / :set rnu 一致）。
-	LineNum lineNumMode
+	LineNum termd.LineNumMode
 	// Blink 硬件光标是否闪烁（对应 :set cursorblink / :set nocursorblink）。
 	Blink bool
 	// FileIcons 文件浏览器是否渲染 Nerd Font 图标（仅 Nerd Font 终端有效）。
@@ -21,9 +22,9 @@ type TermdConfig struct {
 	SmoothScroll bool
 }
 
-// termdrcName 是配置文件名（点文件，位于用户家目录）。
+// TermdrcName 是配置文件名（点文件，位于用户家目录）。
 // Linux 与 Unix 统一使用该名称；Windows 下同样放在用户目录，保持跨平台一致。
-const termdrcName = ".termdrc"
+const TermdrcName = ".termdrc"
 
 // LoadTermdrc 读取并解析用户家目录下的 .termdrc。
 // 若文件不存在或无法读取，返回带默认值的配置（行号关闭、光标闪烁开启），
@@ -45,7 +46,7 @@ const termdrcName = ".termdrc"
 // “set ”前缀可省略，直接写 “nu” 亦可。
 func LoadTermdrc() *TermdConfig {
 	cfg := &TermdConfig{
-		LineNum:      lnNone,
+		LineNum:      termd.LNNone,
 		Blink:        true,  // 与运行时默认一致
 		FileIcons:    false, // 默认关闭：普通终端无 Nerd Font 字形，避免方块乱码
 		SmoothScroll: true,  // 与运行时默认一致
@@ -54,7 +55,7 @@ func LoadTermdrc() *TermdConfig {
 	if err != nil {
 		return cfg
 	}
-	path := filepath.Join(home, termdrcName)
+	path := filepath.Join(home, TermdrcName)
 	f, err := os.Open(path)
 	if err != nil {
 		return cfg // 文件不存在：使用默认值
@@ -72,11 +73,11 @@ func LoadTermdrc() *TermdConfig {
 		}
 		switch line {
 		case "nu", "number":
-			cfg.LineNum = lnAbs
+			cfg.LineNum = termd.LNAbs
 		case "rnu", "relativenumber":
-			cfg.LineNum = lnRel
+			cfg.LineNum = termd.LNRel
 		case "nonu", "nonumber", "norelativenumber":
-			cfg.LineNum = lnNone
+			cfg.LineNum = termd.LNNone
 		case "cursorblink":
 			cfg.Blink = true
 		case "nocursorblink":
@@ -95,10 +96,10 @@ func LoadTermdrc() *TermdConfig {
 }
 
 // ApplyTo 将配置应用到编辑器模型，使启动时的持久设置生效。
-func (c *TermdConfig) ApplyTo(m *editorModel) {
+func (c *TermdConfig) ApplyTo(m *EditorModel) {
 	m.sm.SetLineNum(c.LineNum)
 	m.blinkMode = c.Blink
 	m.smoothScroll = c.SmoothScroll
 	// 文件浏览器图标开关（Nerd Font 终端才应开启）
-	fbUseIcons = c.FileIcons
+	termd.FBUseIcons = c.FileIcons
 }

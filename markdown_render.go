@@ -1,4 +1,4 @@
-package main
+package termd
 
 import (
 	"regexp"
@@ -70,7 +70,7 @@ func (r *Renderer) RenderBlock(blockText string, width int) string {
 var (
 	reInlineCode = regexp.MustCompile("`([^`]+)`")                              // `code`
 	reImage      = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)               // ![alt](url)
-	reLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)                // [text](url)
+	ReLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)                // [text](url)
 	reBoldItalic = regexp.MustCompile(`\*\*\*([^*]+)\*\*\*`)                    // ***粗斜体***
 	reBold       = regexp.MustCompile(`\*\*([^*]+)\*\*`)                        // **粗体**
 	reItalic     = regexp.MustCompile(`\*([^*]+)\*`)                            // *斜体*
@@ -123,8 +123,8 @@ func RenderInline(s string) string {
 	// 2. 链接 [text](url) → 只渲染链接文本（下划线 + 高亮色），不显示 url；
 	//    实际链接目标由点击处理（Preview 模式左键点击链接跳转，见 mouse.go / model.go）。
 	//    渲染顺序在粗体/斜体之前，链接文本内部的格式不会被二次解析。
-	s = reLink.ReplaceAllStringFunc(s, func(m string) string {
-		sub := reLink.FindStringSubmatch(m)
+	s = ReLink.ReplaceAllStringFunc(s, func(m string) string {
+		sub := ReLink.FindStringSubmatch(m)
 		return stLink.Render(sub[1])
 	})
 	// 3. 粗斜体 ***x***
@@ -182,8 +182,8 @@ func RenderInline(s string) string {
 
 // ---- block 识别辅助 ----
 
-// isFenceStart 判断是否为代码块/围栏块起始行（``` 或 ~~~，可带语言标注）。
-func isFenceStart(s string) bool {
+// IsFenceStart 判断是否为代码块/围栏块起始行（``` 或 ~~~，可带语言标注）。
+func IsFenceStart(s string) bool {
 	t := strings.TrimSpace(s)
 	if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
 		// 仅当后续为可选语言名或空（排除 `内联` 这类）
@@ -197,8 +197,8 @@ func isFenceStart(s string) bool {
 	return false
 }
 
-// isFenceEnd 判断是否为围栏块结束行（``` 或 ~~~）。
-func isFenceEnd(s string) bool {
+// IsFenceEnd 判断是否为围栏块结束行（``` 或 ~~~）。
+func IsFenceEnd(s string) bool {
 	t := strings.TrimSpace(s)
 	return t == "```" || t == "~~~" || strings.HasPrefix(t, "```") && strings.TrimSpace(t) == "```" || strings.HasPrefix(t, "~~~") && strings.TrimSpace(t) == "~~~"
 }
@@ -218,8 +218,8 @@ func isTableDivider(s string) bool {
 	return cleaned == ""
 }
 
-// isTableStart 判断是否为表格起始行（含 | 的行，且下一行是分隔行 |---|---|）。
-func isTableStart(s, next string) bool {
+// IsTableStart 判断是否为表格起始行（含 | 的行，且下一行是分隔行 |---|---|）。
+func IsTableStart(s, next string) bool {
 	t := strings.TrimSpace(s)
 	if !strings.Contains(t, "|") {
 		return false
@@ -227,14 +227,14 @@ func isTableStart(s, next string) bool {
 	return isTableDivider(next)
 }
 
-// isMathBlockDelim 判断是否为数学块分隔行（独占一行的 $$）。
-func isMathBlockDelim(s string) bool {
+// IsMathBlockDelim 判断是否为数学块分隔行（独占一行的 $$）。
+func IsMathBlockDelim(s string) bool {
 	return strings.TrimSpace(s) == "$$"
 }
 
-// isMathBlock 判断一行是否“开启”一个数学块：独占一行的 $$ 或单行显示公式 $$...$$。
+// IsMathBlock 判断一行是否“开启”一个数学块：独占一行的 $$ 或单行显示公式 $$...$$。
 // 注意：仅以 $$ 开头但不成对的行（如行内 $$x$$ 误用）不会被当成块首，避免误吞正文。
-func isMathBlock(s string) bool {
+func IsMathBlock(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "$$" {
 		return true
@@ -243,20 +243,20 @@ func isMathBlock(s string) bool {
 	return strings.HasPrefix(t, "$$") && strings.HasSuffix(t, "$$") && len([]rune(t)) > 4
 }
 
-// isSingleLineMath 判断是否为单行显示公式 $$...$$（无需另寻结束分隔行）。
-func isSingleLineMath(s string) bool {
+// IsSingleLineMath 判断是否为单行显示公式 $$...$$（无需另寻结束分隔行）。
+func IsSingleLineMath(s string) bool {
 	t := strings.TrimSpace(s)
 	return strings.HasPrefix(t, "$$") && strings.HasSuffix(t, "$$") && len([]rune(t)) > 4
 }
 
-// isDefListLine 判断是否为定义列表的“定义”行（以 ": " 开头）。
-func isDefListLine(s string) bool {
+// IsDefListLine 判断是否为定义列表的“定义”行（以 ": " 开头）。
+func IsDefListLine(s string) bool {
 	return strings.HasPrefix(strings.TrimSpace(s), ": ")
 }
 
-// isDefTermLine 判断一行能否作为定义列表的“术语”行（前导行）。
+// IsDefTermLine 判断一行能否作为定义列表的“术语”行（前导行）。
 // 排除其它块级语法（标题/引用/列表/代码/表格/分隔线等），只允许普通段落文本。
-func isDefTermLine(s string) bool {
+func IsDefTermLine(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "" {
 		return false
@@ -286,8 +286,8 @@ func isFootnoteDef(s string) bool {
 	return idx > 2
 }
 
-// byteLinesToStrings 把 [][]byte 转为 []string。
-func byteLinesToStrings(lines [][]byte) []string {
+// ByteLinesToStrings 把 [][]byte 转为 []string。
+func ByteLinesToStrings(lines [][]byte) []string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
 		out[i] = string(l)

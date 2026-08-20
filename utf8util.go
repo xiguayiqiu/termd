@@ -1,4 +1,4 @@
-package main
+package termd
 
 import "unicode/utf8"
 
@@ -10,8 +10,8 @@ func encodeRune(r rune, dst []byte) int {
 	return utf8.EncodeRune(dst, r)
 }
 
-// decodeRune 从 data[0] 解码一个 rune，返回 rune 与字节宽度。
-func decodeRune(data []byte) (rune, int) {
+// DecodeRune 从 data[0] 解码一个 rune，返回 rune 与字节宽度。
+func DecodeRune(data []byte) (rune, int) {
 	return utf8.DecodeRune(data)
 }
 

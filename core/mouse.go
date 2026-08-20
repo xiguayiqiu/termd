@@ -1,4 +1,4 @@
-package main
+package core
 
 // ============================================================
 // mouse —— 鼠标支持
@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"termd"
 
 	"github.com/charmbracelet/bubbletea"
 )
@@ -49,11 +50,11 @@ const (
 //  4. 其余鼠标事件忽略。
 //
 // 返回可选命令（Preview 滚动时携带终端滚动区序列，实现平滑行滚动）。
-func (m *editorModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
+func (m *EditorModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	e := tea.MouseEvent(msg)
 
 	// 帮助视图 / 文件浏览器等状态不响应鼠标拖拽。
-	if m.helpMode || m.cmdHelpMode || (m.fb != nil && m.fb.open) {
+	if m.helpMode || m.cmdHelpMode || (m.fb != nil && m.fb.Opened) {
 		// 文件浏览器/帮助页里仍允许滚轮翻阅，但跳过拖拽与点击。
 		if e.IsWheel() {
 			return m.handleWheel(e)
@@ -82,7 +83,7 @@ func (m *editorModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			m.mouseDragging = true
 			m.mouseDragStartX = e.X
 			m.mouseDragStartW = m.outlineWidth()
-			m.status = T("拖动可调整大纲宽度")
+			m.status = termd.T("拖动可调整大纲宽度")
 			return nil
 		}
 	}
@@ -103,11 +104,11 @@ func (m *editorModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 // handlePreviewClick 在 Preview 模式左键点击 (x,y)（0-based 屏幕列/行）时，
 // 定位点击处是否命中超链接：命中则用系统默认程序打开（http(s) 走浏览器，
 // 本地路径走 xdg-open / open），并提示状态栏。
-func (m *editorModel) handlePreviewClick(x, y int) {
-	if m.sm.Mode() != ModePreview {
+func (m *EditorModel) handlePreviewClick(x, y int) {
+	if m.sm.Mode() != termd.ModePreview {
 		return // 编辑/命令模式点击用于移动光标/输入，不跳转
 	}
-	if m.helpMode || m.cmdHelpMode || (m.fb != nil && m.fb.open) {
+	if m.helpMode || m.cmdHelpMode || (m.fb != nil && m.fb.Opened) {
 		return
 	}
 	ch := visibleLines(m)
@@ -139,22 +140,22 @@ func (m *editorModel) handlePreviewClick(x, y int) {
 // 列定位基于**渲染后**文本：原始行中的 markdown 标记（反引号/粗体等）在渲染后
 // 消失，点击列与渲染后显示对齐（若用原始行计算列会偏移，导致链接点不准）。
 // 内部复用 linkTargetAtDispCol 完成链接命中判定（含软换行偏移换算）。
-func (m *editorModel) linkAt(row, col int) string {
+func (m *EditorModel) linkAt(row, col int) string {
 	if row < 0 || row >= len(m.previewRowToBuffer) {
 		return ""
 	}
 	brow := m.previewRowToBuffer[row]
-	line := string(m.buf.GetLine(brow))
+	line := string(m.Buf.GetLine(brow))
 	if line == "" {
 		return ""
 	}
-	// 该 buffer 行的预览视觉行（与 rebuildPreview 的渲染口径一致：RenderLine + wrapText）
+	// 该 buffer 行的预览视觉行（与 rebuildPreview 的渲染口径一致：RenderLine + termd.WrapText）
 	width := m.contentWidth()
 	if width < 20 {
 		width = 20
 	}
-	rendered := m.rend.RenderLine(m.buf.GetLine(brow), true, m.sm.searchKeyword)
-	rlines := wrapText(rendered, width)
+	rendered := m.Rend.RenderLine(m.Buf.GetLine(brow), true, m.sm.SearchKeyword)
+	rlines := termd.WrapText(rendered, width)
 	if brow >= len(m.bufferToPreview) {
 		return ""
 	}
@@ -166,7 +167,7 @@ func (m *editorModel) linkAt(row, col int) string {
 	// 点击列在该视觉段内；该段之前所有段累计的显示宽度即软换行偏移
 	base := 0
 	for i := 0; i < seg; i++ {
-		base += fbDisplayWidth(stripANSIForWidth(rlines[i]))
+		base += termd.FBDisplayWidth(stripANSIForWidth(rlines[i]))
 	}
 	return m.linkTargetAtDispCol(brow, base+col)
 }
@@ -176,19 +177,19 @@ func (m *editorModel) linkAt(row, col int) string {
 // 光标回车（预览 Enter / 编辑 Enter）统一复用。
 // 跳过图片链接（![alt](url) 的 [alt](url) 部分）：图片占位不是超链接，光标停在
 // 占位上回车不应跳转。
-func (m *editorModel) linkTargetAtDispCol(brow, dispCol int) string {
-	line := string(m.buf.GetLine(brow))
+func (m *EditorModel) linkTargetAtDispCol(brow, dispCol int) string {
+	line := string(m.Buf.GetLine(brow))
 	if line == "" {
 		return ""
 	}
 	// 原始行中按顺序提取所有链接文本与目标（跳过图片 ![alt](url)）
 	type link struct{ text, url string }
 	var links []link
-	for _, loc := range reLink.FindAllStringIndex(line, -1) {
+	for _, loc := range termd.ReLink.FindAllStringIndex(line, -1) {
 		if loc[0] > 0 && line[loc[0]-1] == '!' {
 			continue // 图片占位，不是超链接
 		}
-		sub := reLink.FindStringSubmatch(line[loc[0]:loc[1]])
+		sub := termd.ReLink.FindStringSubmatch(line[loc[0]:loc[1]])
 		if sub == nil || len(sub) < 3 {
 			continue
 		}
@@ -198,7 +199,7 @@ func (m *editorModel) linkTargetAtDispCol(brow, dispCol int) string {
 		return ""
 	}
 	// 在整行渲染后的纯文本中按顺序定位每个链接文本（渲染后列与预览显示一致）
-	rendered := m.rend.RenderLine(m.buf.GetLine(brow), true, m.sm.searchKeyword)
+	rendered := m.Rend.RenderLine(m.Buf.GetLine(brow), true, m.sm.SearchKeyword)
 	wholePlain := stripANSIForWidth(rendered)
 	searchPos := 0
 	for _, lk := range links {
@@ -207,8 +208,8 @@ func (m *editorModel) linkTargetAtDispCol(brow, dispCol int) string {
 			break // 链接文本渲染后变化（含嵌套格式），无法继续精确定位
 		}
 		abs := searchPos + idx
-		colStart := fbDisplayWidth(wholePlain[:abs])
-		colEnd := fbDisplayWidth(wholePlain[:abs+len(lk.text)])
+		colStart := termd.FBDisplayWidth(wholePlain[:abs])
+		colEnd := termd.FBDisplayWidth(wholePlain[:abs+len(lk.text)])
 		if dispCol >= colStart && dispCol < colEnd {
 			return lk.url
 		}
@@ -220,16 +221,16 @@ func (m *editorModel) linkTargetAtDispCol(brow, dispCol int) string {
 // linkTargetAtCursorEdit 返回 Edit 模式（NORMAL 态）当前光标处命中的链接 URL；
 // 未命中返回 ""。编辑模式光标是 rune 列，因此按原始行中 [text](url) 的 rune 列
 // 区间判断（光标行显示原文 [text](url)，回车跳转语义直观）。跳过图片链接。
-func (m *editorModel) linkTargetAtCursorEdit() string {
-	line := string(m.buf.GetLine(m.cursorRow))
+func (m *EditorModel) linkTargetAtCursorEdit() string {
+	line := string(m.Buf.GetLine(m.cursorRow))
 	if line == "" {
 		return ""
 	}
-	for _, loc := range reLink.FindAllStringIndex(line, -1) {
+	for _, loc := range termd.ReLink.FindAllStringIndex(line, -1) {
 		if loc[0] > 0 && line[loc[0]-1] == '!' {
 			continue // 图片占位，不是超链接
 		}
-		sub := reLink.FindStringSubmatch(line[loc[0]:loc[1]])
+		sub := termd.ReLink.FindStringSubmatch(line[loc[0]:loc[1]])
 		if sub == nil || len(sub) < 3 {
 			continue
 		}
@@ -254,7 +255,7 @@ func (m *editorModel) linkTargetAtCursorEdit() string {
 //   - 本地路径（含相对路径）→ 相对当前文件目录解析后交给系统默认程序。
 //
 // 打开失败不影响编辑（仅状态栏提示）。
-func (m *editorModel) openLink(target string) {
+func (m *EditorModel) openLink(target string) {
 	url := target
 	switch {
 	case isURLScheme(url):
@@ -269,24 +270,24 @@ func (m *editorModel) openLink(target string) {
 		}
 	default:
 		// 本地路径：相对路径基于当前文件所在目录解析
-		if m.buf.filePath != "" && !filepath.IsAbs(url) {
-			url = filepath.Join(filepath.Dir(m.buf.filePath), url)
+		if m.Buf.FilePath() != "" && !filepath.IsAbs(url) {
+			url = filepath.Join(filepath.Dir(m.Buf.FilePath()), url)
 		}
 	}
 	// 本地 markdown 文件：直接在编辑器内打开（跳转编辑），URL 则用系统浏览器打开
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") && isMarkdownFile(url) {
 		if err := m.loadFile(url); err != nil {
-			m.status = T("无法打开链接: ") + target + " (" + err.Error() + ")"
+			m.status = termd.T("无法打开链接: ") + target + " (" + err.Error() + ")"
 			return
 		}
-		m.status = T("已打开链接: ") + target
+		m.status = termd.T("已打开链接: ") + target
 		return
 	}
 	if err := launchSystemOpen(url); err != nil {
-		m.status = T("无法打开链接: ") + target + " (" + err.Error() + ")"
+		m.status = termd.T("无法打开链接: ") + target + " (" + err.Error() + ")"
 		return
 	}
-	m.status = T("已打开链接: ") + target
+	m.status = termd.T("已打开链接: ") + target
 }
 
 // isMarkdownFile 判断是否为本地 markdown 文件（.md / .markdown）。
@@ -370,7 +371,7 @@ func launchSystemOpen(target string) error {
 //   - Shift / Ctrl 修饰键：整页滚动（vim pagescroll）。
 //
 // 指针位于大纲列内时滚大纲高亮项（并联动正文），否则滚正文当前行/高亮行。
-func (m *editorModel) handleWheel(e tea.MouseEvent) tea.Cmd {
+func (m *EditorModel) handleWheel(e tea.MouseEvent) tea.Cmd {
 	var dir int
 	switch e.Button {
 	case tea.MouseButtonWheelUp:
@@ -396,7 +397,7 @@ func (m *editorModel) handleWheel(e tea.MouseEvent) tea.Cmd {
 }
 
 // outlineScroll 在大纲项列表中滚动高亮项 delta 步（并同步正文）。
-func (m *editorModel) outlineScroll(delta int) {
+func (m *EditorModel) outlineScroll(delta int) {
 	n := len(m.outlineItems)
 	if n == 0 {
 		return
@@ -410,11 +411,11 @@ func (m *editorModel) outlineScroll(delta int) {
 // vim mouse_vert_step）：每 tick 恰好移动 mouseScrollStep 个屏幕行，滚动平滑、永不
 // "跳一大片"；Preview 模式下返回终端滚动区序列（DECSTBM 物理移动内容，不闪烁）。
 // :set nosmoothscroll 可退回"按 buffer 行移动光标"的兼容模式。
-func (m *editorModel) browseScroll(delta int) tea.Cmd {
-	if m.sm.Mode() == ModeEdit {
+func (m *EditorModel) browseScroll(delta int) tea.Cmd {
+	if m.sm.Mode() == termd.ModeEdit {
 		if !m.smoothScroll {
 			// 兼容模式：按 buffer 行移动光标，视口跟随（老终端/习惯行为）
-			m.cursorRow = clamp(m.cursorRow+delta, 0, m.buf.LineCount()-1)
+			m.cursorRow = clamp(m.cursorRow+delta, 0, m.Buf.LineCount()-1)
 			m.colKeep()
 			m.ensureCursorVisible()
 			return nil
@@ -424,7 +425,7 @@ func (m *editorModel) browseScroll(delta int) tea.Cmd {
 	}
 	if !m.smoothScroll {
 		// 兼容模式：按 buffer 行移动高亮行，视口跟随
-		m.previewCursor = clamp(m.previewCursor+delta, 0, m.buf.LineCount()-1)
+		m.previewCursor = clamp(m.previewCursor+delta, 0, m.Buf.LineCount()-1)
 		m.ensurePreviewCursorVisible()
 		return nil
 	}
@@ -432,7 +433,7 @@ func (m *editorModel) browseScroll(delta int) tea.Cmd {
 }
 
 // resizeOutlineDrag 在按住拖动时，按鼠标列位移实时调整大纲列宽。
-func (m *editorModel) resizeOutlineDrag(x int) {
+func (m *EditorModel) resizeOutlineDrag(x int) {
 	// 新宽度 = 拖拽起点宽度 + 鼠标横向位移
 	delta := x - m.mouseDragStartX
 	w := m.mouseDragStartW + delta
