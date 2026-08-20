@@ -28,7 +28,7 @@
 ## 安装
 ```bash
 # 用户级安装
-mkdir -p /home/$USER/.local/bin/ cp termd ~/.local/bin/
+mkdir -p /home/$USER/.local/bin/ && cp termd ~/.local/bin/
 
 # 系统级安装
 sudo cp termd /usr/local/bin/
