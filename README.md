@@ -26,18 +26,14 @@
 ---
 
 ## 安装
-
-需要 Go 1.26.5 或更高版本。
-
 ```bash
-git clone <repo-url> termd
-cd termd
-go build -o termd ./cmd/termd
+# 用户级安装
+mkdir -p /home/$USER/.local/bin/ cp termd ~/.local/bin/
+
+# 系统级安装
+sudo cp termd /usr/local/bin/
+
 ```
-
-构建产物为 `termd` 可执行文件。
-
----
 
 ## 使用
 
