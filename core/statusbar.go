@@ -149,16 +149,47 @@ func (m *EditorModel) renderCmdLine() string {
 	// 正文（在整行底色上）。防止超宽撑破整行（超宽会使 bubbletea 截断 View 末行）；
 	// 留 3 列：1 前缀 + 1 光标块 + 1 余量。
 	body = runewidth.Truncate(body, width-3, "…")
+	bodyW := runewidth.StringWidth(body)
+	// 光标块紧贴输入正文末尾（不隔空格、不粘行末），与 cmdlineCursorGoto 定位列完全一致：
+	//   - col 1：前缀
+	//   - col 2..(1+bodyW)：已输入正文
+	//   - col 1+bodyW+1：光标块（即「正文结束后第 1 位」，vim 命令行光标位置）
+	//   - 之后：灰底空格占满行末
+	// 此前踩过的坑：
+	//   1) 用 24-bit 粉底 #ff79c6 + dracula 前景 #282a36，在不支持 TrueColor 的终端被
+	//      降级成黑色块，深色终端上不可见。
+	//   2) 改成白底(255)黑字(0)后仍显示黑块——因为 █ 是实心字符，字符本身（前景色）
+	//      填满整个单元格，背景色被完全覆盖。所以「块要什么颜色」必须设在前景色上。
+	//   3) body 后多留了 1 个空格，导致块落在 col 1+bodyW+2、与硬件光标定位的
+	//      col 1+bodyW+1 错开 1 位 → 去掉空格，块紧跟正文。
 	field := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255"))
-	// 补齐空格占满整行：总宽 = width；已用 = 1(前缀) + bodyW + 1(光标块)
-	used := 1 + runewidth.StringWidth(body) + 1
-	pad := width - used
-	if pad < 0 {
-		pad = 0
-	}
-	fieldText := body + strings.Repeat(" ", pad)
-	// 光标块：实心块（仿 vim 命令行光标）
+	// 白色光标块：前景白色(255)+Bold 使实心 █ 整格变白；背景用深色兜底即可。
 	cursorBlock := lipgloss.NewStyle().
-		Background(lipgloss.Color("255")).Foreground(lipgloss.Color("236")).Render("█")
-	return pre + field.Render(fieldText) + cursorBlock
+		Bold(true).
+		Background(lipgloss.Color("236")).
+		Foreground(lipgloss.Color("255")).
+		Render("█")
+	// 剩余行末空格（光标块之后用 236 灰底铺到行末）
+	trailingW := width - 1 - bodyW - 1
+	if trailingW < 0 {
+		trailingW = 0
+	}
+	trailing := lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(strings.Repeat(" ", trailingW))
+	return pre + field.Render(body) + cursorBlock + trailing
+}
+
+// cmdlineCursorGoto 返回把硬件光标定位到命令行输入框的 ANSI 序列（仿 vim 命令行）。
+// 命令行固定在屏幕倒数第二行（height 行是底线）；光标块紧跟已输入正文末尾，
+// 因此硬件光标定位到光标块所在列（1 前缀 + 正文宽度 + 1 = 块起始列），形成块光标效果。
+func (m *EditorModel) cmdlineCursorGoto() string {
+	row := m.height - 1
+	if row < 1 {
+		row = 1
+	}
+	col := 1 + 1 // 前缀 + 空正文时的光标块
+	input := m.sm.CmdInput
+	if r := []rune(input); len(r) > 1 {
+		col = 1 + runewidth.StringWidth(string(r[1:])) + 1
+	}
+	return cursorGoto(row, col, m.blinkMode)
 }

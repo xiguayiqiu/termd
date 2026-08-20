@@ -326,7 +326,7 @@ func (m *EditorModel) executeCommand(input string) tea.Cmd {
 	// 打开极简文件浏览器属于从 Preview 全屏切换到另一种全屏视图，
 	// 必须先清除 Preview 模式遗留的终端物理滚动区（DECSTBM），
 	// 否则该滚动区的 diff 缓存会与新两栏内容叠加，造成「预览残留与文件列表混合」。
-	if m.fb.Opened {
+	if m.fb != nil && m.fb.Opened {
 		m.invalidateScrollRender()
 		return m.clearScrollRegionCmd()
 	}

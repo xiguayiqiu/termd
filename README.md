@@ -278,7 +278,7 @@ func main() {
 - **识别方式**：` ```语言名 ```` 围栏内的内容作为代码块整体送 glamour 渲染（chroma 负责高亮）。
 - **支持语言**：约 **250 种**——240 个嵌入式 lexer（移植自 Pygments）+ 数十个手写 lexer，覆盖 Go、Python、Rust、TypeScript、JavaScript、Java、C、C++、C#、Ruby、PHP、Swift、Kotlin、SQL、Bash/Shell、YAML、JSON、HTML、CSS、Markdown、LaTeX、Diff、Dockerfile、Makefile 等主流语言。
 - **匹配规则**（chroma `lexers.Get`）：按 **名称/别名**（如 `golang`→Go、`py`→Python、`cpp`/`c++`→C++、`js`→JavaScript）→ **大小写不敏感**（`GO`、`Python` 均可）→ **扩展名/文件名** 三级匹配。
-- **降级行为**：未匹配到任何语言的标签（如 ` ```text ````、` ```none ````、拼写错误）不会报错，代码块按**纯文本**展示（无颜色），见 `core/model_render_util.go::highlightCode`（`lexers.Fallback`）。
+- **降级行为**：无语言标注（```` ``` ````）或未匹配到任何语言的标签（如 ` ```text ````、` ```none ````、拼写错误）不会报错，代码块按**纯文本**原样展示（终端默认前景色，不染色），见 `core/model_render_util.go::highlightCode`。
 
 ---
 

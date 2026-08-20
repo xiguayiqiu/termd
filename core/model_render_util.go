@@ -63,7 +63,10 @@ const codeLidFg = "\x1b[38;5;239m"
 func highlightCode(lang, code string) []string {
 	lexer := lexers.Get(strings.TrimSpace(lang))
 	if lexer == nil {
-		lexer = lexers.Fallback
+		// 无语言标注（```）或语言无法识别（```unknown）：不染色，原样返回文本。
+		// 之前落到 chroma Fallback 会把内容统一染成白色前景（浅色终端下几乎不可见），
+		// 且不属于任何语法高亮——无语言代码块应保持终端默认前景色（默认不高亮）。
+		return strings.Split(code, "\n")
 	}
 	lexer = chroma.Coalesce(lexer)
 	style := styles.Get("dracula")

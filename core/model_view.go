@@ -63,19 +63,16 @@ func (m *EditorModel) View() string {
 			}
 		}()
 		var body strings.Builder
-		cursorRow := -1 // 预览/命令模式下当前行的绝对行号，用于将硬件光标定位过去
 		switch m.sm.Mode() {
 		case termd.ModePreview:
-			s, row := m.renderPreview()
+			s, _ := m.renderPreview()
 			body.WriteString(s)
-			cursorRow = row
 		case termd.ModeEdit:
 			s := m.renderEdit()
 			body.WriteString(s)
 		case termd.ModeCommand:
-			s, row := m.renderPreview()
+			s, _ := m.renderPreview()
 			body.WriteString(s)
-			cursorRow = row
 		}
 		// 命令模式下，命令行内容（底部第二行）；否则为空
 		cmdLine := ""
@@ -89,24 +86,25 @@ func (m *EditorModel) View() string {
 		}
 		rendered = m.fixBottom(bodyStr, cmdLine)
 		// 光标定位策略：
-		//  - 编辑模式：光标行已由 renderEdit 注入蓝底块（RenderEditLineWithCursorStyled/
-		//    insertCursor）指示输入位置，不再输出硬件光标，避免蓝底块+白光标双光标重叠。
-		//  - 命令模式：预览当前行 + 命令行输入框都需要硬件光标，定位到预览当前行文本起点。
-		//  - 预览模式：状态栏常驻（与内容区隔离），仍隐藏硬件光标，仅用 injectPreviewCursor
-		//    注入的蓝底块指示当前行位置，避免硬件光标残留在底部状态栏位置。
-		// 光标行号 +1：顶部有 1 行边框线（frameLine 顶线），内容区从屏幕第 2 行开始。
-		if m.sm.Mode() == termd.ModePreview {
-			rendered += hideCursor()
-		} else if m.sm.Mode() == termd.ModeEdit {
-			rendered += hideCursor()
-		} else if cursorRow > 0 {
-			rendered += cursorGoto(cursorRow+1, 6, m.blinkMode)
-		}
+		//  - 编辑/预览模式：光标位置已由 renderEdit/renderPreview 注入的蓝底块指示，
+		//    隐藏硬件光标避免双光标重叠。
+		//  - 命令模式：硬件光标定位到命令行输入框（前缀后紧跟输入位置，仿 vim），
+		//    不再定位到预览当前行——命令模式不移动当前行，定位过去只会造成光标错位。
 	}()
 
 	// 末尾追加滚动区恢复保险：任何情况下都恢复全屏滚动区，防止滚动帧异常残留
 	// DECSTBM 导致后续渲染持续触发终端滚动（界面逐步上移/消失）。
-	return rendered + "\x1b[r"
+	// 注意：DECSTBM（\x1b[r）在多数终端会把光标移动到 home position（左上角），
+	// 因此必须先恢复滚动区、再输出光标控制序列；否则命令模式的光标定位会被
+	// \x1b[r 覆盖——光标跳到左上角被顶线遮挡，表现为「命令模式下不显示光标」。
+	restoreScroll := "\x1b[r"
+	switch m.sm.Mode() {
+	case termd.ModeCommand:
+		rendered += restoreScroll + m.cmdlineCursorGoto()
+	default:
+		rendered += restoreScroll + hideCursor()
+	}
+	return rendered
 }
 
 // fallbackView 在渲染 panic 兜底时返回一个尽量简单、不可能再 panic 的视图，
