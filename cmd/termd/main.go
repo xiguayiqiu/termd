@@ -24,7 +24,7 @@ import (
 //  3. 构造 editorModel，运行 bubbletea 程序（启用鼠标/AltScreen 以获得全屏体验）。
 //
 // version 为当前发布版本号（语义化版本）。
-const version = "1.0-release"
+const version = "1.1-release"
 
 // usageText 返回 --help 的帮助文本（含 i18n 文案）。
 func usageText() string {
