@@ -12,6 +12,7 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/yuin/goldmark v1.8.5
+	golang.org/x/text v0.24.0
 )
 
 require (
@@ -44,5 +45,4 @@ require (
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
 )

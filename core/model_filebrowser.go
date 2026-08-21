@@ -60,6 +60,9 @@ func (m *EditorModel) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		case termd.KeyEsc: // keymap: fb.cancel
 			fb.Close()
 			m.status = termd.T("已退出文件浏览器")
+		case "ctrl+o": // 再次按下关闭文件浏览器（与 Esc 等价，形成开关）
+			fb.Close()
+			m.status = termd.T("已退出文件浏览器")
 		case "tab": // keymap: fb.toggleFocus
 			// 焦点在左栏列表 / 右栏预览之间切换
 			fb.ToggleFocus()

@@ -41,9 +41,9 @@ var mdRE = regexp.MustCompile("^(#{1,6}\\s|>\\s|[-*+]\\s|[-*+]\\s\\[[ xX]\\]\\s|
 // blockStartRE 识别块级语法的起始（代码块、表格分隔行等）。
 var blockStartRE = regexp.MustCompile("^(```|~~~)")
 
-// inlineMDRE 识别行内 Markdown 语法（粗体/斜体/删除线/行内代码/链接/图片/emoji/数学）。
+// inlineMDRE 识别行内 Markdown 语法（粗体/斜体/删除线/行内代码/链接/图片/emoji）。
 // 用于让普通段落行也能渲染其中的行内语法。
-var inlineMDRE = regexp.MustCompile("(\\*\\*|~~|\\*|`|\\[[^\\]]+\\]|!\\[|\\$[^$]+\\$|(:[a-z0-9_+-]+:))")
+var inlineMDRE = regexp.MustCompile("(\\*\\*|~~|--|==|%%|\\*|`|\\[[^\\]]+\\]|!\\[|(:[a-z0-9_+-]+:))")
 
 // Renderer 负责把 Buffer 的某一行/段落渲染成带样式的最终字符串。
 type Renderer struct {
@@ -403,6 +403,20 @@ func (r *Renderer) RenderEditLineWithCursor(line []byte, cursorCol int) string {
 	}
 }
 
+// RenderCommentLineWithCursor 渲染编辑模式下"多行注释块内"的光标行：
+// 整行以注释样式（暗灰斜体）渲染，并按显示列注入蓝底光标块（保持列对齐）。
+// 与 RenderEditLineWithCursor 的差异：主体整体使用注释样式（不解析行内语法），
+// 注释内容中的 `*`/`**`/`_` 等不会被误认为 markdown 标记。
+func (r *Renderer) RenderCommentLineWithCursor(line []byte, cursorCol int) string {
+	s := string(line)
+	trimmed := strings.TrimLeft(s, " \t")
+	indent := s[:len(s)-len(trimmed)]
+	insertAt := cursorAt(s, cursorCol)
+	disp := runeColToDisp(trimmed, insertAt)
+	// injectCursorBlock 是 ANSI-aware 的（跳过 CSI 序列），可安全用于已含样式的串
+	return indent + injectCursorBlock(CommentStyle().Render(trimmed), disp)
+}
+
 // RenderEditLineWithCursorStyled 是 RenderEditLineWithCursor 的增强版：
 // 主体做行内标记着色（**粗体**/*斜体*/`代码`/~~删除线~~/[链接](url) 的标记字符着色，
 // 不改变文本与显示宽度），再按显示列注入蓝底光标块，使光标列与输入位置严格对齐。
@@ -470,16 +484,16 @@ func runeColToDisp(s string, col int) int {
 // inlineMarkRE 匹配行内语法标记（粗体/删除线/行内代码/链接/斜体），
 // 用于编辑模式光标行的“标记着色”——仅替换标记字符为样式，不改变文本与宽度。
 var inlineMarkRE = regexp.MustCompile(
-	`\*\*.+?\*\*|~~.+?~~|` + "`[^`]+?`" + `|\[[^\]]+\]\([^)]*\)|\*[^*\s][^*]*?\*`)
+	`\*\*.+?\*\*|~~.+?~~|--.+?--|==.+?==|%%(.+?)%%|` + "`[^`]+?`" + `|\[[^\]]+\]\([^)]*\)|\[\^[^\]]+\]|\^\[[^\]]+\]|\*[^*\s][^*]*?\*`)
 
-// highlightInlineMarks 对行内语法标记字符着色（** * ` ~~ [ ] ( )），不改变文本内容与显示宽度。
+// highlightInlineMarks 对行内语法标记字符着色（** * ` ~~ -- == %% [ ] ( ) ^），不改变文本内容与显示宽度。
 // 仅用于编辑模式光标行：保留原文（可编辑）同时让 markdown 语法“可见地渲染”出来。
 func highlightInlineMarks(s string) string {
-	if !strings.ContainsAny(s, "*`~[]") {
+	if !strings.ContainsAny(s, "*`~[-=%") {
 		return s
 	}
 	markStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	bgStyle := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
+	bgStyle := lipgloss.NewStyle().Background(lipgloss.Color("240")).Foreground(lipgloss.Color("252"))
 	linkStyle := lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("39"))
 	return inlineMarkRE.ReplaceAllStringFunc(s, func(m string) string {
 		switch {
@@ -487,8 +501,18 @@ func highlightInlineMarks(s string) string {
 			return markStyle.Render("**") + m[2:len(m)-2] + markStyle.Render("**")
 		case strings.HasPrefix(m, "~~") && strings.HasSuffix(m, "~~"):
 			return markStyle.Render("~~") + m[2:len(m)-2] + markStyle.Render("~~")
+		case strings.HasPrefix(m, "--") && strings.HasSuffix(m, "--"):
+			return markStyle.Render("--") + m[2:len(m)-2] + markStyle.Render("--")
+		case strings.HasPrefix(m, "==") && strings.HasSuffix(m, "=="):
+			return markStyle.Render("==") + m[2:len(m)-2] + markStyle.Render("==")
+		case strings.HasPrefix(m, "%%") && strings.HasSuffix(m, "%%"):
+			return markStyle.Render("%%") + m[2:len(m)-2] + markStyle.Render("%%")
 		case strings.HasPrefix(m, "`") && strings.HasSuffix(m, "`"):
 			return bgStyle.Render(m)
+		case strings.HasPrefix(m, "[^"):
+			return markStyle.Render(m)
+		case strings.HasPrefix(m, "^["):
+			return markStyle.Render(m[:2]) + m[2:len(m)-1] + markStyle.Render("]")
 		case strings.HasPrefix(m, "[") && strings.HasSuffix(m, ")"):
 			return linkStyle.Render(m)
 		default: // 斜体 *x*
@@ -689,9 +713,6 @@ func (r *Renderer) renderStyledLine(s string, highlight string) string {
 		// 有序列表：保留 "1. " 序号，内容渲染行内语法
 		idx := strings.Index(trimmed, ". ")
 		return indent + r.Styles.List.Render(trimmed[:idx+2]+RenderInline(trimmed[idx+2:]))
-	case isInlineCode(trimmed):
-		// 整行被反引号包裹：作为代码展示
-		return indent + r.Styles.CodeBg.Render(trimmed)
 	case isHR(trimmed):
 		// 分隔线：用一条横线呈现，长度占满可用宽度（未设置时退化为定长）
 		ruleLen := r.wrap
@@ -699,9 +720,17 @@ func (r *Renderer) renderStyledLine(s string, highlight string) string {
 			ruleLen = 20
 		}
 		return indent + r.Styles.Dim.Render(strings.Repeat("─", ruleLen))
-	case isFootnoteDef(trimmed):
-		// 脚注定义 [^id]: 文本
-		return indent + r.Styles.Quote.Render(trimmed)
+	case IsFootnoteDefLine(trimmed):
+		// 脚注定义 [^id]: 内容 —— 显示 [id] 编号 + 行内渲染的内容
+		t := trimmed
+		ci := strings.Index(t, "]:")
+		id := t[2:ci]
+		rest := strings.TrimSpace(t[ci+2:])
+		content := rest
+		if rest != "" {
+			content = RenderInline(rest)
+		}
+		return indent + stFnNum.Render("["+id+"] ") + content
 	case IsDefListLine(trimmed):
 		// 定义列表定义行 : term —— 以 ▸ 标记呈现，并对内容渲染行内语法
 		return indent + r.Styles.List.Render("▸ "+RenderInline(trimmed[2:]))
@@ -770,34 +799,6 @@ func isHR(s string) bool {
 		}
 	}
 	return true
-}
-
-// isInlineCode 判断是否为纯代码行（整行被一组反引号包裹，如 `code` 或 “code“）。
-// 必须整行被反引号包裹（行首行尾各一组同数反引号、内部无其它反引号），否则像
-// "`termd` 是一个..." 这类「行内代码 + 正文」的普通段落会被误判为整行代码，
-// 导致行内语法（粗体/链接等）全部不渲染。
-func isInlineCode(s string) bool {
-	t := strings.TrimSpace(s)
-	if t == "" || strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-		return false
-	}
-	if strings.HasPrefix(t, "`") && strings.HasSuffix(t, "`") {
-		open := 0
-		for open < len(t) && t[open] == '`' {
-			open++
-		}
-		closeN := 0
-		for closeN < len(t) && t[len(t)-1-closeN] == '`' {
-			closeN++
-		}
-		if open == closeN && open <= 2 {
-			inner := t[open : len(t)-closeN]
-			if !strings.Contains(inner, "`") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // indentLevel 根据前导空白估算 Markdown 嵌套层级（每 2 个空格约一级）。

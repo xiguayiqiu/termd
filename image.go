@@ -424,6 +424,15 @@ func sampleImage(img image.Image, w, h int) [][]color.Color {
 			for sy := y0; sy < y1; sy++ {
 				for sx := x0; sx < x1; sx++ {
 					rr, gg, bb, aa := img.At(sx, sy).RGBA()
+					// RGBA() 返回预乘 alpha 值。透明/半透明像素的 RGB 在预乘空间叠加
+					// 白色背景 (65535-alpha)，透明区域即呈现为白底而非黑色。
+					// 对完全不透明像素（aa=65535）无影响。
+					if aa < 65535 {
+						inv := 65535 - aa
+						rr += inv
+						gg += inv
+						bb += inv
+					}
 					r += rr
 					g += gg
 					bl += bb

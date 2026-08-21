@@ -54,9 +54,25 @@ func (m *EditorModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	e := tea.MouseEvent(msg)
 
 	// 帮助视图 / 文件浏览器等状态不响应鼠标拖拽。
-	if m.helpMode || m.cmdHelpMode || (m.fb != nil && m.fb.Opened) {
+	if m.helpMode || m.cmdHelpMode || m.markdownLangMode || (m.fb != nil && m.fb.Opened) {
 		// 文件浏览器/帮助页里仍允许滚轮翻阅，但跳过拖拽与点击。
 		if e.IsWheel() {
+			// Markdown 语法教程视图：滚轮直接滚动教程内容（mlScroll），
+			// 不经过 browseScroll（那会滚动正文/光标）。
+			if m.markdownLangMode {
+				delta := 0
+				switch e.Button {
+				case tea.MouseButtonWheelUp:
+					delta = -mouseScrollStep
+				case tea.MouseButtonWheelDown:
+					delta = mouseScrollStep
+				}
+				if e.Shift || e.Ctrl {
+					delta *= 3
+				}
+				m.mlScroll += delta
+				return nil
+			}
 			return m.handleWheel(e)
 		}
 		return nil
@@ -108,7 +124,7 @@ func (m *EditorModel) handlePreviewClick(x, y int) {
 	if m.sm.Mode() != termd.ModePreview {
 		return // 编辑/命令模式点击用于移动光标/输入，不跳转
 	}
-	if m.helpMode || m.cmdHelpMode || (m.fb != nil && m.fb.Opened) {
+	if m.helpMode || m.cmdHelpMode || m.markdownLangMode || (m.fb != nil && m.fb.Opened) {
 		return
 	}
 	ch := visibleLines(m)
@@ -249,13 +265,26 @@ func (m *EditorModel) linkTargetAtCursorEdit() string {
 	return ""
 }
 
-// openLink 用系统默认程序打开链接目标：
+// openLink 打开链接目标：
+//   - 锚点链接（#anchor / doc.md#anchor）→ 文档内目录跳转（见 anchors.go）；
 //   - http(s):// 及其它 URL scheme（mailto: / ftp: / tel: 等）→ 系统默认程序；
 //   - 裸域名 / 裸 IP（www.baidu.com、127.0.0.1:8080）→ 自动补协议后系统默认程序；
 //   - 本地路径（含相对路径）→ 相对当前文件目录解析后交给系统默认程序。
 //
 // 打开失败不影响编辑（仅状态栏提示）。
 func (m *EditorModel) openLink(target string) {
+	// 锚点链接：本文件（#anchor）或其它 md 文件（doc.md#anchor）内的目录跳转。
+	// 放在最前，避免 "#anchor" 被当作本地路径交给系统打开。
+	if path, anchor, ok := splitAnchorTarget(target); ok {
+		if path != "" {
+			if err := m.loadFile(path); err != nil {
+				m.status = termd.T("无法打开链接: ") + target + " (" + err.Error() + ")"
+				return
+			}
+		}
+		m.jumpToAnchor(anchor) // 跳转/未命中的状态提示由 jumpToAnchor 负责
+		return
+	}
 	url := target
 	switch {
 	case isURLScheme(url):

@@ -129,6 +129,20 @@ func padCodeLine(line string, maxW int) string {
 // 使“逻辑视觉行数”≠“真实显示行数”，预览滚动偏移与蓝底光标块随之错位（飘逸）。
 // 故矩形宽度钳制到 availWidth，超宽代码行按显示列软换行（termd.WrapText 保留 chroma 着色）。
 func renderCodeRect(rendered, widthRef []string, firstPrefix, lidPrefix string, availWidth int) []string {
+	return codeRectCore(rendered, widthRef, firstPrefix, lidPrefix, availWidth, true)
+}
+
+// renderCommentRect 是 renderCodeRect 的"无上下盖"变体：仅保留每行灰底 +
+// 左侧边框竖线 + 右边缘补齐。用于多行注释块等短内容块，避免顶/底盖
+// 各占一行纯灰条造成上下空间浪费。
+func renderCommentRect(rendered, widthRef []string, firstPrefix, lidPrefix string, availWidth int) []string {
+	return codeRectCore(rendered, widthRef, firstPrefix, lidPrefix, availWidth, false)
+}
+
+// codeRectCore 是代码框矩形公共实现：计算自适应宽度（以 widthRef 测宽、钳制到
+// availWidth），逐行铺灰底 + 左边界线 + 右边缘补齐；withLid=true 时额外绘制
+// 上/下盖纯灰条（renderCodeRect），false 时省略（renderCommentRect）。
+func codeRectCore(rendered, widthRef []string, firstPrefix, lidPrefix string, availWidth int, withLid bool) []string {
 	if availWidth < 4 {
 		availWidth = 4
 	}
@@ -147,7 +161,9 @@ func renderCodeRect(rendered, widthRef []string, firstPrefix, lidPrefix string, 
 	}
 	var out []string
 	// 顶盖：gutter + 边框 + 灰底 + 宽 maxW 的纯色条 + 重置
-	out = append(out, lidPrefix+codeBorder+codeBG+codeLidFg+strings.Repeat(" ", maxW)+"\x1b[0m")
+	if withLid {
+		out = append(out, lidPrefix+codeBorder+codeBG+codeLidFg+strings.Repeat(" ", maxW)+"\x1b[0m")
+	}
 	for k, rl := range rendered {
 		prefix := firstPrefix
 		if k > 0 {
@@ -164,7 +180,9 @@ func renderCodeRect(rendered, widthRef []string, firstPrefix, lidPrefix string, 
 		}
 	}
 	// 底盖
-	out = append(out, lidPrefix+codeBorder+codeBG+codeLidFg+strings.Repeat(" ", maxW)+"\x1b[0m")
+	if withLid {
+		out = append(out, lidPrefix+codeBorder+codeBG+codeLidFg+strings.Repeat(" ", maxW)+"\x1b[0m")
+	}
 	return out
 }
 

@@ -62,6 +62,10 @@ type EditorModel struct {
 	helpMode bool
 	// cmdHelpMode：命令模式命令帮助视图是否打开（由 :help 打开，Esc 关闭）
 	cmdHelpMode bool
+	// markdownLangMode：Markdown 语法教程视图是否打开（由 :ml 打开，Esc 关闭）
+	markdownLangMode bool
+	// mlScroll：Markdown 语法教程视图的滚动偏移（视觉行）
+	mlScroll int
 	// outlineMode：大纲侧边栏是否打开（默认关闭；Preview/Edit 模式按 ctrl+t 切换）。
 	// 打开时主内容区宽度缩减，左侧绘制 markdown 标题目录，用于快速跳转。
 	outlineMode bool

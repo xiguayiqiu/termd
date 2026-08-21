@@ -2,7 +2,7 @@
 
 `termd` 是一个运行于终端的轻量级 Markdown 编辑器，基于 [bubbletea](https://github.com/charmbracelet/bubbletea) 框架构建，提供**编辑**与**实时富文本预览**双模式。
 
-- 预览采用「块级 glamour 渲染 + 行内正则渲染」的混合策略，效果类似 mdcat（支持表格、代码高亮、数学公式），同时保留极低的输入延迟。
+- 预览采用「块级 glamour 渲染 + 行内正则渲染」的混合策略，效果类似 mdcat（支持表格、代码高亮），同时保留极低的输入延迟。
 - 编辑态采用 vim 式按键模型（INSERT / NORMAL 双态），支持计数、撤销、行号、搜索等。
 - 内置 `:ex` 文件浏览器（**两栏**：左=文件列表，右=文本预览），可新建 / 删除 / 重命名文件与目录。
 - **当前不支持图片渲染**：`![alt](url)` 在 Preview 中以占位符（`🖼 alt (url)`）显示，图形渲染（Kitty 图形协议 / 半块字符）尚未接入渲染主路径。
@@ -12,10 +12,10 @@
 
 ## 特性
 
-- **Edit/Preview 双模式**：`Ctrl+E` 切换；Preview 模式块级语法走 glamour（`GFM + Footnote + Emoji`），行内语法走轻量正则。
-- **行内语法即时高亮**：粗体、斜体、粗斜体、删除线、行内代码、链接、图片、emoji 简码 `:smile:`、行内数学 `$...$`、转义字符。
+- **Edit/Preview 双模式**：Preview 模式按 `i` / `e` / `a` 回到 Edit（插入）模式；Preview 块级语法走 glamour（`GFM + Footnote + Emoji`），行内语法走轻量正则。
+- **行内语法即时高亮**：粗体、斜体、粗斜体、删除线（`~~x~~` 或 `--x--`）、高亮文字（`==x==`，荧光笔效果）、行内代码、链接、图片、脚注引用 `[^1]`（绿色上标）、行内脚注 `^[直接嵌入的文本]`、注释（`%%x%%` 单行、`%% ... %%` 多行块，暗灰斜体）、emoji 简码 `:smile:`、转义字符。
 - **链接点击跳转**：Preview 模式左键点击渲染后的超链接，`http(s)` 用系统浏览器打开，本地路径（含相对路径）用系统默认程序打开（`xdg-open` / `open`）。
-- **块级语法**：代码块（chroma 语言高亮，支持约 250 种编程语言，见[代码块高亮](#代码块高亮)）、表格（对齐线）、数学块 `$$...$$`、脚注、定义列表、分隔线、嵌套引用。
+- **块级语法**：代码块（chroma 语言高亮，支持约 250 种编程语言，见[代码块高亮](#代码块高亮)；`mermaid` 代码块渲染为终端字符画图，见[Mermaid 绘图](#mermaid-绘图)）、表格（对齐线，分隔行支持 `\|:---\|` 左对齐 / `\|:---:\|` 居中 / `\|---:\|` 右对齐）、脚注（`[^id]: 内容`，支持缩进续行多行）、定义列表、分隔线、嵌套引用。
 - **行号**：`:set nu`（绝对）/ `:set rnu`（相对）/ `:set nonu`（关闭）。
 - **命令模式**：`:` 进入，支持 `:w` 保存、`:q` 退出、`:d` 系列删除、`:set` 配置等。
 - **文件浏览**：Edit 模式按 `Ctrl+O` 打开文件浏览器，可新建 / 删除文件与目录。
@@ -52,6 +52,9 @@ sudo cp termd /usr/local/bin/
 
 # 查看 ~/.termdrc 可用配置项
 ./termd -rc
+
+# 查看 termd 支持的 Markdown 语法教程
+./termd -ml
 ```
 
 ---
@@ -64,7 +67,6 @@ sudo cp termd /usr/local/bin/
 
 | 按键 | 作用 |
 | --- | --- |
-| `Ctrl+E` | 切换 Edit / Preview 模式 |
 | `i` / `e` / `a` | 进入 Edit（插入）模式 |
 | `Esc` | 返回 NORMAL 导航态 / 退出命令模式 |
 | `:` | 进入命令模式 |
@@ -122,6 +124,7 @@ Edit 模式内部再分 **INSERT（插入）** 与 **NORMAL（普通导航）** 
 | `:dk 行号` / `:dj 行号` | 从当前行向上 / 向下删除到指定行 |
 | `:数字` | 跳转到指定行（如 `:12`） |
 | `:help` / `:keymap` | 查看命令帮助 / 键位一览 |
+| `:ml` | 查看 Markdown 语法教程（termd 支持的全部语法，Esc 关闭，j/k 或滚轮翻页） |
 
 ### 鼠标
 
@@ -236,8 +239,10 @@ set nosmoothscroll
 | `statemachine.go` | 三模式状态机（`ModePreview` / `ModeEdit` / `ModeCommand`）及 Edit 子态、`LineNumMode` 行号模式 |
 | `buffer.go` | 行存储缓冲区（`[][]byte`），光标定位、插入/删除、撤销（undo）等编辑操作 |
 | `renderer.go` | 混合渲染策略：单行富文本渲染、光标对齐、软换行（`WrapText`）、CJK 列宽计算、glamour 单行渲染 |
-| `markdown_render.go` | 行内语法轻量正则渲染（`RenderInline`）、块级 glamour 渲染（`RenderBlock`）、块级语法识别（代码块/表格/数学块/脚注/定义列表） |
+| `markdown_render.go` | 行内语法轻量正则渲染（`RenderInline`，含脚注引用/行内脚注）、块级 glamour 渲染（`RenderBlock`）、块级语法识别（代码块/表格/脚注定义/定义列表） |
+| `mermaid.go` | Mermaid 图 → ANSI 字符画渲染（`RenderMermaid` / `IsMermaidFence`）：flowchart（节点形状/边/标签/subgraph）+ sequenceDiagram（消息线/Note/分组），其余图类型降级为代码块 |
 | `keymap.go` | 键盘操作单一事实来源（`DefaultKeyMap`），生成键位/命令帮助视图（`:help` / `:keymap`） |
+| `MarkdownLanguage.go` | Markdown 语法教程文本（`RenderMarkdownLanguage`）：覆盖 termd 支持的全部语法，供 `:ml` 命令视图与 `-ml` 参数使用 |
 | `filebrowser.go` | `:ex` 文件浏览器：两栏布局（左列表 / 右文本预览）、新建/删除/重命名文件与目录、Nerd Font 图标着色 |
 | `image.go` | 图片模块：远程（带缓存、异步）/ 本地（位图 + SVG 光栅化）、Kitty 图形协议 / 半块字符回退均已实现但**未接入渲染主路径**（当前图片显示为 `🖼` 占位符） |
 | `i18n.go` | 中英文国际化（`T` / `Tf`），依据环境变量自动检测语言 |
@@ -255,8 +260,9 @@ set nosmoothscroll
 
 Preview 模式采用 **block-aware 混合渲染**：
 
-- **行内语法**（粗体 / 斜体 / 删除线 / 行内代码 / 链接 / 图片 / emoji / 数学 `$...$` / 转义）走轻量正则 `RenderInline`，逐行、零延迟、不依赖 TTY。
-- **块级语法**（代码块 ```` ``` ```` / 表格 / 数学块 `$$` / 脚注）整块送 **glamour**（`Renderer.RenderBlock`）渲染，保证表格对齐线、代码 chroma 高亮、分隔线正确。
+- **行内语法**（粗体 / 斜体 / 删除线 / 高亮文字 / 注释 / 行内代码 / 链接 / 图片 / 脚注引用 / 行内脚注 / emoji / 转义）走轻量正则 `RenderInline`，逐行、零延迟、不依赖 TTY。
+- **块级语法**（代码块 ```` ``` ```` / 表格 / 定义列表）整块送 **glamour**（`Renderer.RenderBlock`）渲染，保证表格对齐线、代码 chroma 高亮、分隔线正确。
+- **脚注定义块**（`[^id]: 内容` + 缩进续行）逐行自渲染（编号 + 行内内容），不走 glamour（其单独定义渲染为空、行内脚注不识别）。
 - 普通段落行也通过 `inlineMDRE` 检测并渲染其中的行内语法。
 
 这套方案渲染行为稳定可控，且保留 1:1 行号（block 内部多行共享首个 buffer 行号，行号列仅首行显示）。
@@ -275,6 +281,24 @@ func main() {
 - **支持语言**：约 **250 种**——240 个嵌入式 lexer（移植自 Pygments）+ 数十个手写 lexer，覆盖 Go、Python、Rust、TypeScript、JavaScript、Java、C、C++、C#、Ruby、PHP、Swift、Kotlin、SQL、Bash/Shell、YAML、JSON、HTML、CSS、Markdown、LaTeX、Diff、Dockerfile、Makefile 等主流语言。
 - **匹配规则**（chroma `lexers.Get`）：按 **名称/别名**（如 `golang`→Go、`py`→Python、`cpp`/`c++`→C++、`js`→JavaScript）→ **大小写不敏感**（`GO`、`Python` 均可）→ **扩展名/文件名** 三级匹配。
 - **降级行为**：无语言标注（```` ``` ````）或未匹配到任何语言的标签（如 ` ```text ````、` ```none ````、拼写错误）不会报错，代码块按**纯文本**原样展示（终端默认前景色，不染色），见 `core/model_render_util.go::highlightCode`。
+
+### Mermaid 绘图
+
+`````` ```mermaid ```` 代码块在 Edit（光标离开块后）与 Preview 模式下渲染为**纯 ANSI 字符画**（不依赖 SVG/PNG 或外部 mermaid-cli，`termd/mermaid.go`）：
+
+```mermaid
+graph TD
+  A[开始] --> B{判断}
+  B -- 是 --> C[执行]
+  B -- 否 --> D[跳过]
+  C --> E((结束))
+  D --> E
+```
+
+- **flowchart / graph**：`TB` / `TD` / `LR` 方向；节点 `A[矩形]` `A(圆角)` `A((圆形))` `A{菱形}` `A[[六边形]]` `A[(圆柱)]` `A>旗标]`；边 `-->`（实线箭头）、`---`（无箭头）、`-.->` / `-. text .->`（虚线）、`==>`（粗线）、`--text-->` / `-->|text|`（带标签）、链式 `A --> B --> C`；`subgraph id[标题]` 分组标题；`%%` 注释。
+- **sequenceDiagram**：`participant` / `actor` 声明，`->` / `-->` / `->>` / `-->>` / `--)` / `--x` 等消息线（实线/虚线），`Note left of / right of / over`，`loop` / `alt` / `opt` 分组。
+- **降级行为**：不支持的图类型（`classDiagram`、`stateDiagram-v2`、`gantt`、`pie` 等）或解析失败时，按普通代码块（chroma 高亮 / 纯文本）展示，不报错。
+- 渲染结果套用与其他代码块一致的灰底自适应矩形，宽字符（中文）按显示宽度对齐。
 
 ---
 

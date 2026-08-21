@@ -80,10 +80,13 @@ func fcitx5InputFilter(_ tea.Model, msg tea.Msg) tea.Msg {
 }
 
 // sanitizeKeyRunes 清洗 KeyMsg 中可能混入的 fcitx5/终端控制字节：
-//   - 丢弃所有 ASCII 控制字符（< 0x20，换行/制表/退格等编辑器专用键已由
-//     bubbletea 解析为独立 KeyType，不会以 rune 形式出现，故此处可安全剥离）。
-//   - 丢弃独立的 \x1b（ESC，0x1b）及其后的 CSI 引导残留——这些通常是未被
-//     框架消费的输入法转义序列，混入文本会表现为乱码/乱序。
+//   - 丢弃独立的 \x1b（ESC，0x1b）——通常是未被框架消费的输入法转义序列
+//     残留，混入文本会表现为乱码/乱序（这正是“随机插入 i”的根因之一）。
+//   - 丢弃其它 ASCII 控制字符（< 0x20）：NUL/SOH/.../DEL 等。
+//   - **但 bracketed paste（k.Paste）例外**：粘贴文本整体以 KeyRunes 送达，
+//     其中的换行 \n / 回车 \r / 制表 \t 是正文的有效内容，**不会被**像 Enter
+//     按键那样解析为独立 KeyType，必须保留，否则多行粘贴会被压成单行、
+//     缩进丢失（“无法保持原格式粘贴”的根因）。
 //   - 保留正常的可打印 rune（含中文、emoji 等多字节字符）。
 //
 // 返回 (清洗后的 KeyMsg, 是否保留)。若清洗后无任何可读字符，ok 为 false，
@@ -98,6 +101,15 @@ func sanitizeKeyRunes(k tea.KeyMsg) (tea.KeyMsg, bool) {
 		if r == 0x1b {
 			// 丢弃裸 ESC：通常是未解析的 IME/终端转义序列残留，
 			// 不应作为字符写入缓冲区（这正是“随机插入 i”的根因之一）。
+			continue
+		}
+		if r == '\t' || (k.Paste && (r == '\n' || r == '\r')) {
+			// 制表符无条件保留：缩进是正文的有效内容。手动 Tab 键实际会被
+			// bubbletea 解析为 KeyTab 消息（Type=KeyTab），不会进入此 rune 循环；
+			// 若仍以 KeyRunes 送达（IME/异常终端组合），丢弃会导致粘贴缩进丢失。
+			// 粘贴中的换行/回车必须保留（见函数注释）；非粘贴时 \n/\r 几乎不会
+			// 以 KeyRunes 出现（Enter 是独立 KeyEnter 消息），保持仅 paste 保留。
+			clean = append(clean, r)
 			continue
 		}
 		if r < 0x20 {

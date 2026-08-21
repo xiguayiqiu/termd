@@ -144,6 +144,17 @@ func (m *EditorModel) executeCommand(input string) tea.Cmd {
 	case cmd == ":u":
 		if m.Buf.Undo() {
 			m.status = termd.T("已撤销")
+			// 撤销也属于内容变更：使 Preview 渲染缓存与滚动缓存失效并同步 swap，
+			// 否则 Preview 模式画面不更新（:u "无效"的根因）。
+			m.touch()
+			// 命令执行后已回到 Preview 模式：撤销可能减少行数，先钳制预览光标，
+			// 下次 renderPreview 重建缓存后会经 ensurePreviewCursorVisible 对齐视口。
+			m.previewCursor = clamp(m.previewCursor, 0, m.Buf.LineCount()-1)
+			m.previewColKeep()
+			// Edit 光标同步钳制，防止下次切回 Edit 模式时越界（仿 vim check_cursor）。
+			m.clampCursor()
+			m.cursWant = m.cursorCol
+			m.ensureCursorVisible()
 		} else {
 			m.status = termd.T("无可撤销操作")
 		}
@@ -191,6 +202,11 @@ func (m *EditorModel) executeCommand(input string) tea.Cmd {
 		// 打开键位帮助视图（集中注册于 keymap.go），Esc 关闭
 		m.helpMode = true
 		m.status = termd.T("键位帮助（Esc 关闭）")
+	case cmd == ":ml":
+		// 打开 Markdown 语法教程视图（MarkdownLanguage.go），Esc 关闭，j/k 或滚轮翻页
+		m.markdownLangMode = true
+		m.mlScroll = 0
+		m.status = termd.T("Markdown 语法教程（Esc 关闭，j/k 或滚轮翻页）")
 
 	case cmd == ":toc":
 		// 打开/关闭大纲目录侧边栏（默认关闭，等价 ctrl+t）

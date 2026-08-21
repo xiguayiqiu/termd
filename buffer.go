@@ -18,6 +18,9 @@ type Buffer struct {
 	IsDirty bool
 	// filePath 关联的磁盘文件路径（为空表示新建未命名文件）
 	filePath string
+	// Encoding 文件编码识别结果（仿 Vim &fileencoding）。LoadFile 时按
+	// fileencodings 检测链识别，内部统一转 UTF-8 存储；Save 时按此编码回写。
+	Encoding Encoding
 	// undoStack 操作历史栈，每个元素是一份完整的行快照
 	undoStack [][][]byte
 	// notify 是可选的变更回调（崩溃恢复用）：任何内容变更后触发一次，
@@ -45,10 +48,15 @@ func (b *Buffer) LoadFile(path string) error {
 			// 文件不存在 => 视为新建，初始化为一行空内容即可
 			b.Lines = make([][]byte, 1)
 			b.IsDirty = false
+			b.Encoding = Encoding{Name: EncUTF8, UTF8: true}
 			return nil
 		}
 		return err
 	}
+	// 编码识别（仿 Vim 'fileencodings' 检测链：BOM → UTF-8 → GBK → latin1），
+	// 非 UTF-8 内容统一转为内部 UTF-8 存储，原编码名记录在 b.Encoding。
+	b.Encoding, data = DetectEncoding(data)
+	data = b.Encoding.DecodeToUTF8(data)
 	b.Lines = bytes.Split(data, []byte{'\n'})
 	// 去掉可能的末尾空行噪音（当文件以 \n 结尾时 Split 会多出一个空切片）
 	if len(b.Lines) > 0 && len(b.Lines[len(b.Lines)-1]) == 0 {
@@ -88,6 +96,7 @@ func (b *Buffer) markChanged() {
 
 // writeTo 将缓冲区内容序列化后写入指定路径。
 // 若目标文件不存在则自动创建（包括多级目录由调用方保证存在），符合“保存即创建”语义。
+// 内容按 b.Encoding 转回原编码（含 BOM），确保「打开→保存」不改变文件的字节编码。
 func (b *Buffer) writeTo(path string) error {
 	var buf bytes.Buffer
 	for i, line := range b.Lines {
@@ -96,8 +105,10 @@ func (b *Buffer) writeTo(path string) error {
 		}
 		buf.Write(line)
 	}
+	// 内部统一 UTF-8，写盘时转回检测到的原编码（GBK/latin1/UTF-16 等），并保留 BOM。
+	out := b.Encoding.EncodeFromUTF8(buf.Bytes())
 	// os.WriteFile 在文件不存在时会创建它（权限 0o644）；已存在则覆盖写入。
-	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(path, out, 0o644); err != nil {
 		return err
 	}
 	return nil

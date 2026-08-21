@@ -52,9 +52,45 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Markdown 语法教程视图打开时：Esc 关闭，j/k/上下键/翻页键滚动教程内容
+		if m.markdownLangMode {
+			switch msg.String() {
+			case "esc":
+				m.markdownLangMode = false
+				m.mlScroll = 0
+				m.status = termd.T("已关闭 Markdown 语法教程")
+			case "j", "down", "pgdown", " ":
+				m.mlScroll += max(1, m.contentHeight()-4)
+			case "k", "up", "pgup":
+				m.mlScroll -= max(1, m.contentHeight()-4)
+			case "ctrl+d":
+				m.mlScroll += max(4, m.contentHeight()/2)
+			case "ctrl+u":
+				m.mlScroll -= max(4, m.contentHeight()/2)
+			case "g":
+				m.mlScroll = 0
+			case "G", "end":
+				m.mlScroll = 1 << 30 // 渲染时会被 clamp 到底
+			}
+			return m, nil
+		}
 		// 文件浏览器打开时，事件优先交给浏览器处理
 		if m.fb != nil && m.fb.Opened {
 			return m.handleFileBrowserKey(msg)
+		}
+		// 粘贴（bracketed paste）：Preview 模式无插入语义，自动切到 Edit 插入态，
+		// 避免粘贴内容被 Preview 按键处理完全忽略（表现为“粘贴没有生效”）。
+		if msg.Paste && msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && m.sm.Mode() == termd.ModePreview {
+			if err := m.sm.EnterEdit(); err == nil {
+				m.cursorRow = clamp(m.previewCursor, 0, m.Buf.LineCount()-1)
+				m.cursorCol = 0
+				m.cursWant = 0
+				m.ensureCursorVisible()
+				m.status = termd.T("已粘贴（Preview 自动进入编辑）")
+			}
+			m2, c := m.handleInsertKey(msg)
+			m = m2.(*EditorModel)
+			return m, tea.Batch(c, tea.HideCursor)
 		}
 		// 集中控制硬件光标：编辑模式隐藏光标（用反显块表示位置），
 		// 预览/命令模式显示光标并定位到当前行（由 renderPreview 注入定位序列）。

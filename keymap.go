@@ -251,7 +251,9 @@ var DefaultKeyMap = []Binding{
 	{Modes: []EditorMode{ModeNameCommand}, Keys: []string{":dj"}, Action: "cmd.deleteDownTo",
 		Description: ":dj 行号 从当前行向下删除到指定行", Group: "命令模式命令"},
 	{Modes: []EditorMode{ModeNameCommand}, Keys: []string{":help"}, Action: "cmd.help",
-		Description: ":help 查看命令模式命令帮助 / :keymap 查看键位表", Group: "命令模式命令"},
+		Description: ":help 查看命令模式命令帮助 / :keymap 查看键位表 / :ml 查看 Markdown 语法教程", Group: "命令模式命令"},
+	{Modes: []EditorMode{ModeNameCommand}, Keys: []string{":ml"}, Action: "cmd.ml",
+		Description: ":ml 查看 Markdown 语法教程（termd 支持的全部语法，Esc 关闭，j/k 或滚轮翻页）", Group: "命令模式命令"},
 
 	// ---------------- 文件浏览器 ----------------
 	{Modes: []EditorMode{ModeNameFileBrowser}, Keys: []string{KeyEsc}, Action: "fb.cancel",
@@ -401,6 +403,7 @@ var commandDocs = []commandDoc{
 	{":%", "显示当前文件名（未命名缓冲区显示「未命名」）"},
 	{":help", "查看本命令模式命令帮助（Esc 关闭）"},
 	{":keymap", "查看键位帮助一览（Esc 关闭）"},
+	{":ml", "查看 Markdown 语法教程（termd 支持的全部语法，Esc 关闭，j/k 或滚轮翻页）"},
 	{":toc", "开关大纲目录侧边栏（等价快捷键 ctrl+t，用于标题跳转）"},
 }
 

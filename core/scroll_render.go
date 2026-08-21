@@ -23,6 +23,8 @@ package core
 //     多行时滚轮“跳一大片”。
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"termd"
@@ -231,12 +233,104 @@ func (m *EditorModel) centerPreviewOnCursor() {
 // ---- Edit 模式视觉行工具（termd.WrapText 口径与 renderEdit / ensureCursorVisible 一致）----
 
 // editVisualHeight 返回第 i 个 buffer 行渲染后的视觉行数（软换行后，至少 1）。
+// mermaid 代码块整块按其渲染后的 ANSI 字符画行数计（renderCodeRect 实际输出行数，
+// 含矩形上下盖）：滚动/光标计算与 renderEdit 的真实渲染高度一致，否则大图被估算成
+// 源码行数，滚动窗口无法跳过它，画面被图钉死（无法上下移动光标）。
 func (m *EditorModel) editVisualHeight(i int) int {
+	if h, ok := m.editMermaidVisualHeight(i); ok {
+		return h
+	}
 	n := len(termd.WrapText(string(m.Buf.GetLine(i)), m.editAvailWidth()))
 	if n < 1 {
 		n = 1
 	}
 	return n
+}
+
+// editMermaidVisualHeight 若第 i 行是 mermaid 围栏块起始行，返回 (渲染后视觉高度, true)；
+// 否则 (0, false)。渲染高度以 renderCodeRect 实际输出行数为准（与 renderEdit 的
+// mermaid 分支同一口径：可用宽度 = editAvailWidth()-1，含顶/底盖）。
+func (m *EditorModel) editMermaidVisualHeight(i int) (int, bool) {
+	if i < 0 || i >= m.Buf.LineCount() {
+		return 0, false
+	}
+	if !termd.IsFenceStart(strings.TrimSpace(string(m.Buf.GetLine(i)))) {
+		return 0, false
+	}
+	j := i + 1
+	for j < m.Buf.LineCount() && !termd.IsFenceEnd(strings.TrimSpace(string(m.Buf.GetLine(j)))) {
+		j++
+	}
+	if j >= m.Buf.LineCount() {
+		j = m.Buf.LineCount() - 1
+	}
+	fence := strings.TrimSpace(string(m.Buf.GetLine(i)))
+	lang := strings.TrimPrefix(fence, "```")
+	lang = strings.TrimPrefix(lang, "~~~")
+	if !termd.IsMermaidFence(lang) {
+		return 0, false
+	}
+	var inner []string
+	for k := i + 1; k < j; k++ {
+		inner = append(inner, string(m.Buf.GetLine(k)))
+	}
+	// 与 renderEdit 的 mermaid 分支一致：可用宽度再减 1（左侧边框）。
+	ml, ok := termd.RenderMermaid(strings.Join(inner, "\n"), m.editAvailWidth()-1)
+	if !ok {
+		return 0, false
+	}
+	rect := renderCodeRect(ml, ml, "", "", m.editAvailWidth()-1)
+	return len(rect), true
+}
+
+// fixScrollInsideMermaidBlock 确保 Edit 滚动起点不落在 mermaid 渲染块内部：
+//   - 光标在块之后 → scroll 跳到块后首行（否则整块字符画占满视口，后面的内容
+//     永远画不出来，画面被"钉死"，无法上下移动光标）；
+//   - 光标在块内 → scroll 回到块起始行（与 renderEdit 的 cursorInside 分支显示
+//     原始源码的行为一致）。
+//
+// 反向扫描在遇到任何围栏行（起始或结束）时即终止，不会扫完整份文件；另设 4096
+// 行回看上限防御超长无围栏文档。
+func (m *EditorModel) fixScrollInsideMermaidBlock() {
+	if m.scroll <= 0 || m.scroll >= m.Buf.LineCount() {
+		return
+	}
+	s := m.scroll
+	for s > 0 && m.scroll-s < 4096 {
+		ts := strings.TrimSpace(string(m.Buf.GetLine(s)))
+		if termd.IsFenceStart(ts) {
+			break
+		}
+		if termd.IsFenceEnd(ts) {
+			return // 往回先遇到围栏结束：scroll 在该块之后，不在任何更早的块内
+		}
+		s--
+	}
+	if s <= 0 {
+		return
+	}
+	fence := strings.TrimSpace(string(m.Buf.GetLine(s)))
+	lang := strings.TrimPrefix(fence, "```")
+	lang = strings.TrimPrefix(lang, "~~~")
+	if !termd.IsMermaidFence(lang) {
+		return
+	}
+	e := s + 1
+	for e < m.Buf.LineCount() && !termd.IsFenceEnd(strings.TrimSpace(string(m.Buf.GetLine(e)))) {
+		e++
+	}
+	if e >= m.Buf.LineCount() {
+		e = m.Buf.LineCount() - 1
+	}
+	if m.scroll < s || m.scroll > e {
+		return
+	}
+	switch {
+	case m.cursorRow > e: // 光标在块之后：窗口必须整体跳过该块
+		m.scroll = e + 1
+	case m.cursorRow >= s: // 光标在块内：窗口回到块首（显示原始源码）
+		m.scroll = s
+	}
 }
 
 // editVisTotal 返回 [from, to) 区间 buffer 行的视觉行数总和。
@@ -368,5 +462,8 @@ func (m *EditorModel) editScrollByVisual(delta int) {
 		newCrow = ch - 1
 	}
 	m.cursorRow = m.editBufferLineAtVisual(m.scroll, newCrow)
+	// 滚动起点不得落在 mermaid 块内部（否则大图占满视口，画面钉死）。
+	// 光标已按旧 topline 对齐，若 scroll 被修正到块首/块后，光标行仍在窗口内。
+	m.fixScrollInsideMermaidBlock()
 	m.colKeep()
 }

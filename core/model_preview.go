@@ -24,6 +24,12 @@ func (m *EditorModel) handlePreviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleOutline()
 		// 大纲开关改变内容区宽度（重排 previewLines），滚动区失效
 		return m, m.clearScrollRegionCmd()
+	case "ctrl+o": // 打开文件浏览器（keymap: preview.fileBrowser）
+		m.openFileBrowser()
+		// 从 Preview 全屏切换到另一种全屏视图：必须清除 Preview 遗留的终端物理滚动区
+		//（DECSTBM），否则滚动区 diff 缓存会与文件浏览器两栏内容叠加混排。
+		m.invalidateScrollRender()
+		return m, m.clearScrollRegionCmd()
 	case "i", "e", "a": // KeyI/KeyE/KeyA 见 keymap.go（编辑模式进入）
 		// 进入编辑模式：光标接续到预览当前高亮行（i/e 行首插入，a 行尾插入）
 		if err := m.sm.EnterEdit(); err == nil {
@@ -125,6 +131,10 @@ func (m *EditorModel) renderPreview() (string, int) {
 		// 第一行）。重建后重算一次 ensure，保证蓝底光标块始终落在当前光标行。
 		m.ensurePreviewCursorVisible()
 	}
+	// 缓冲区没有任何实际内容：显示 vim 风格介绍信息（欢迎屏），替代空白 + 波浪线。
+	if m.isBufferEmpty() {
+		return m.renderIntro(), -1
+	}
 	var b strings.Builder
 	ch := visibleLines(m)
 	if ch < 1 {
@@ -169,6 +179,94 @@ func (m *EditorModel) renderPreview() (string, int) {
 		absRow = cursorIdx - start + 1
 	}
 	return b.String(), absRow
+}
+
+// isBufferEmpty 判断缓冲区是否“没有实际内容”（所有行均为空或仅空白）。
+// 用于预览模式空缓冲区时显示 vim 风格介绍信息。
+func (m *EditorModel) isBufferEmpty() bool {
+	for i := 0; i < m.Buf.LineCount(); i++ {
+		if strings.TrimSpace(string(m.Buf.GetLine(i))) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// renderIntro 在缓冲区为空时显示 vim 风格介绍信息（欢迎屏）。
+// 仿 vim 启动画面：标题 + 版本 + 常用键位，整块水平居中、顶部对齐，
+// 下方其余可视行用 '~' 填充，保持与 renderPreview 相同的行数（viewport 高度）。
+func (m *EditorModel) renderIntro() string {
+	ch := visibleLines(m)
+	if ch < 1 {
+		ch = 1
+	}
+	width := m.contentWidth()
+	if width < 20 {
+		width = 20
+	}
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	verStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	rows := [][2]string{
+		{"i / a", termd.T("进入编辑模式")},
+		{"/", termd.T("搜索（Preview 模式）")},
+		{":", termd.T("进入命令模式")},
+		{":help", termd.T("查看键位帮助")},
+		{":q", termd.T("退出")},
+	}
+	// 计算 key 列固定宽度，使描述列对齐。
+	keyW := 0
+	for _, r := range rows {
+		if w := termd.FBDisplayWidth(r[0]); w > keyW {
+			keyW = w
+		}
+	}
+	lines := []string{
+		titleStyle.Render(termd.T("termd — 终端 Markdown 编辑器")),
+		"",
+		// 版本号取自根包唯一常量 termd.Version，发布新版本只需改 version.go 一处。
+		verStyle.Render(termd.T("版本") + " " + termd.Version),
+		"",
+	}
+	for _, r := range rows {
+		pad := keyW - termd.FBDisplayWidth(r[0]) + 2
+		lines = append(lines, keyStyle.Render(r[0])+strings.Repeat(" ", pad)+descStyle.Render(r[1]))
+	}
+	lines = append(lines,
+		"",
+		hintStyle.Render(termd.T("类型 :help<Enter> 查看键位帮助，:q<Enter> 退出")),
+	)
+	// 整块水平居中：先求块内最大显示宽度（去 ANSI 后），对每行统一前置
+	// 相同缩进，使整块（而非逐行）位于屏幕中央，键位列左缘对齐。
+	blockW := 0
+	for _, l := range lines {
+		if w := termd.FBDisplayWidth(stripANSIForWidth(l)); w > blockW {
+			blockW = w
+		}
+	}
+	pad := (width - blockW) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	indent := strings.Repeat(" ", pad)
+	// 垂直居中：仿 vim 启动画面，正文块置于内容区竖直中央，
+	// 上方与下方均用 '~' 填充。
+	tildeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
+	topPad := (ch - len(lines)) / 2
+	if topPad < 0 {
+		topPad = 0
+	}
+	var b strings.Builder
+	for i := 0; i < ch; i++ {
+		if i < topPad || i >= topPad+len(lines) {
+			b.WriteString(tildeStyle.Render("~") + "\n")
+		} else {
+			b.WriteString(indent + lines[i-topPad] + "\n")
+		}
+	}
+	return b.String()
 }
 
 // ensurePreviewCursorVisible 让 viewport(scroll)跟随 previewCursor：

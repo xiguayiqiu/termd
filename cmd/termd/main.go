@@ -23,9 +23,6 @@ import (
 //  2. 解析命令行参数作为待编辑文件路径（可选）。
 //  3. 构造 editorModel，运行 bubbletea 程序（启用鼠标/AltScreen 以获得全屏体验）。
 //
-// version 为当前发布版本号（语义化版本）。
-const version = "1.1-release"
-
 // usageText 返回 --help 的帮助文本（含 i18n 文案）。
 func usageText() string {
 	return termd.Tf("用法: %s [选项] [文件]\n", "termd") +
@@ -34,8 +31,8 @@ func usageText() string {
 		termd.T("基于 bubbletea 框架构建，提供编辑与实时富文本预览双模式。") + "\n" +
 		"\n" +
 		termd.T("特性:") + "\n" +
-		"  • " + termd.T("Edit/Preview 双模式：Ctrl+E 切换，预览采用块级 glamour 渲染（表格 / 代码高亮 / 数学公式）。") + "\n" +
-		"  • " + termd.T("行内语法：粗体、斜体、删除线、行内代码、链接、图片、行内数学 $...$ 即时高亮。") + "\n" +
+		"  • " + termd.T("Edit/Preview 双模式：预览采用块级 glamour 渲染（表格 / 代码高亮）。") + "\n" +
+		"  • " + termd.T("行内语法：粗体、斜体、删除线、行内代码、链接、图片、emoji 即时高亮。") + "\n" +
 		"  • " + termd.T("行号：:set nu（绝对）/ :set rnu（相对）/ :set nonu（关闭）。") + "\n" +
 		"  • " + termd.T("命令模式：: 进入，支持 :w 保存、:q 退出、:d 系列删除、:set 配置等。") + "\n" +
 		"  • " + termd.T("文件浏览：Edit 模式按 Ctrl+O 打开文件浏览器，可新建/删除文件与目录。") + "\n" +
@@ -43,7 +40,6 @@ func usageText() string {
 		"  • " + termd.T("多语言界面：依据 LC_ALL/LC_MESSAGES/LANG 自动切换简体中文 / 英文。") + "\n" +
 		"\n" +
 		termd.T("常用键位:") + "\n" +
-		"  " + termd.T("Ctrl+E  切换 Edit / Preview 模式") + "\n" +
 		"  " + termd.T("i / a   进入 Edit（插入）模式") + "\n" +
 		"  " + termd.T("Esc     返回 NORMAL 导航态") + "\n" +
 		"  " + termd.T(":       进入命令模式") + "\n" +
@@ -63,6 +59,7 @@ func usageText() string {
 		"  -h, --help      " + termd.T("显示帮助信息并退出") + "\n" +
 		"  -v, --version   " + termd.T("显示版本号并退出") + "\n" +
 		"  -rc             " + termd.T("显示 ~/.termdrc 可用设置项并退出") + "\n" +
+		"  -ml             " + termd.T("显示 termd 支持的 Markdown 语法教程并退出") + "\n" +
 		"\n" +
 		termd.T("文件:") + "\n" +
 		"  " + termd.T("可选，启动后打开并编辑指定文件（缺省为新建未命名缓冲区）") + "\n"
@@ -111,10 +108,14 @@ func main() {
 			fmt.Print(usageText())
 			return
 		case "-v", "--version":
-			fmt.Println(termd.Tf("termd 版本 %s", version))
+			fmt.Println(termd.Tf("termd 版本 %s", termd.Version))
 			return
 		case "-rc":
 			fmt.Print(rcHelpText())
+			return
+		case "-ml":
+			// 打印 Markdown 语法教程后退出（内容见 termd.MarkdownLanguage.go）
+			fmt.Print(termd.RenderMarkdownLanguage())
 			return
 		default:
 			pathArgs = append(pathArgs, a)

@@ -22,6 +22,11 @@ func (m *EditorModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleOutline()
 		return m, nil
 	}
+	// ctrl+o 打开文件浏览器（keymap: edit.fileBrowser）
+	if msg.String() == "ctrl+o" {
+		m.openFileBrowser()
+		return m, nil
+	}
 	// Esc 语义（仿 vim + 用户需求“Esc 在 编辑↔预览 之间切换”）：
 	//   - INSERT 态：退回 NORMAL 导航态（仿 vim，README 键位表约定）；
 	//   - NORMAL 态：返回预览模式（用户需求）。
@@ -45,11 +50,27 @@ func (m *EditorModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sm.SetEditSub(termd.EditInsert)
 		return m.handleInsertKey(msg)
 	}
+	// 粘贴（bracketed paste）整段文本时同样自动转入插入态写入：
+	// 粘贴是明确的“插入文本”意图，不应被 NORMAL 态的字母快捷键（i/a/j/k…）误吞。
+	if msg.Paste && msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+		m.sm.SetEditSub(termd.EditInsert)
+		return m.handleInsertKey(msg)
+	}
 	// 编辑模式内部再分 插入态(termd.EditInsert) 与 普通导航态(termd.EditNormal)（仿 vim INSERT/NORMAL）。
 	if m.sm.EditSub() == termd.EditInsert {
 		return m.handleInsertKey(msg)
 	}
 	return m.handleNormalKey(msg)
+}
+
+// openFileBrowser 打开文件浏览器（Ctrl+O 快捷键，与 :ex 命令等价；
+// 若已存在实例则复用，保留上次浏览目录）。
+func (m *EditorModel) openFileBrowser() {
+	if m.fb == nil {
+		m.fb = termd.NewFileBrowser(".")
+	}
+	m.fb.Open()
+	m.status = termd.T("文件浏览器已打开")
 }
 
 // ----------------------------------------------------------
@@ -61,12 +82,31 @@ func (m *EditorModel) handleInsertKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyRunes:
+		// 粘贴文本（bracketed paste）整体以 KeyRunes 送达，其中的 \n / \r 不会被
+		// bubbletea 翻译成 KeyEnter，必须在此识别为真正的换行，否则多行粘贴会
+		// 全部挤进当前行（表现为“无法保持原格式、始终单行”）。
+		prevCR := false
 		for _, r := range msg.Runes {
-			m.Buf.InsertRune(m.cursorRow, byteCol, r)
-			// 先推进光标列，再据此重算插入点字节偏移：否则下一轮会用“旧光标列”
-			// 计算出的字节偏移（仍指向行首），把后续字符插到前一个字符之前，
-			// 表现为中文等多 rune 提交时下标乱序（如“你好”变成“好你”）。
-			m.cursorCol++
+			if prevCR {
+				prevCR = false
+				if r == '\n' {
+					continue // \r\n 已作为一次换行处理
+				}
+			}
+			switch r {
+			case '\n', '\r': // 换行：拆分当前行，光标移到新行行首
+				nr, nc := m.Buf.InsertNewline(m.cursorRow, byteCol)
+				m.cursorRow, m.cursorCol = nr, nc
+				if r == '\r' {
+					prevCR = true
+				}
+			default:
+				m.Buf.InsertRune(m.cursorRow, byteCol, r)
+				// 先推进光标列，再据此重算插入点字节偏移：否则下一轮会用“旧光标列”
+				// 计算出的字节偏移（仍指向行首），把后续字符插到前一个字符之前，
+				// 表现为中文等多 rune 提交时下标乱序（如“你好”变成“好你”）。
+				m.cursorCol++
+			}
 			line = m.Buf.GetLine(m.cursorRow)
 			byteCol = runeColToByte(line, m.cursorCol)
 		}
@@ -266,6 +306,7 @@ func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "u":
 		if m.Buf.Undo() {
 			m.status = termd.T("已撤销")
+			m.touch() // 撤销改内容：Preview/滚动缓存失效并同步 swap（与其它编辑路径一致）
 		} else {
 			m.status = termd.T("无可撤销操作")
 		}
@@ -923,20 +964,10 @@ func (m *EditorModel) ensureCursorVisible() {
 	if ch < 1 {
 		ch = 1
 	}
-	// 估算某 buffer 行的视觉行数（与 renderEdit 的 termd.WrapText 一致：可用宽度 = 内容区宽 - 行号占位）。
-	av := m.contentWidth()
-	if m.sm.LineNumMode() != termd.LNNone {
-		av -= 5
-	}
-	if av < 10 {
-		av = 10
-	}
+	// 估算某 buffer 行的视觉行数：统一走 editVisualHeight（与 renderEdit 一致，
+	// mermaid 代码块按其渲染高度整块计），保证光标滚动计算与渲染高度一致。
 	visOf := func(i int) int {
-		n := len(termd.WrapText(string(m.Buf.GetLine(i)), av))
-		if n < 1 {
-			n = 1
-		}
-		return n
+		return m.editVisualHeight(i)
 	}
 	// 累计 scroll..cursorRow-1 的视觉行数
 	acc := 0
@@ -973,4 +1004,6 @@ func (m *EditorModel) ensureCursorVisible() {
 	if m.scroll >= m.Buf.LineCount() {
 		m.scroll = max(0, m.Buf.LineCount()-1)
 	}
+	// 滚动起点不得落在 mermaid 块内部（否则大图占满视口，画面钉死）
+	m.fixScrollInsideMermaidBlock()
 }

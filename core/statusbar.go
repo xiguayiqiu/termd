@@ -68,16 +68,20 @@ func (m *EditorModel) statusBar() string {
 		mode = sub // EDIT 模式直接显示 INSERT / NORMAL，更贴近 vim
 	}
 	mc := m.modeBlockColors()
-	// 文件名 + 脏标记
+	// 文件名 + 编码识别 + 脏标记
 	fname := m.Buf.FilePath()
 	if fname == "" {
 		fname = "[未命名]"
+	}
+	encTag := ""
+	if name := m.Buf.Encoding.Name; name != "" {
+		encTag = "[" + name + "]" // 仿 vim 状态栏的 fenc= 显示（如 [utf-8] / [gbk] / [utf-16le]）
 	}
 	flags := ""
 	if m.Buf.IsDirty {
 		flags += "[+]"
 	}
-	leftText := fmt.Sprintf(" %s  %s %s ", mode, fname, flags)
+	leftText := fmt.Sprintf(" %s  %s %s %s ", mode, fname, encTag, flags)
 	// 防止左段超宽撑破整行（超宽会使 bubbletea 截断 View 末行，导致滚动序列的
 	// 滚动区恢复部分丢失）；截断到 width-1，至少留 1 列给右侧。
 	leftText = runewidth.Truncate(leftText, width-1, "…")
@@ -89,22 +93,27 @@ func (m *EditorModel) statusBar() string {
 		// 命令反馈消息（如“已保存”），仿 vim 临时覆盖标尺区
 		rightText = " " + m.status + " "
 	} else {
-		// 标尺：行,列 / 百分比 / 总行数 / 行号模式
+		// 标尺：行,列 / 进度分析 / 总行数 / 行号模式
 		rowLine := m.cursorRow
 		if m.sm.Mode() == termd.ModePreview {
 			rowLine = m.previewCursor
 		}
 		total := m.Buf.LineCount()
 		col := m.cursorCol + 1
-		pct := 0
-		if total > 0 {
-			pct = (rowLine * 100) / total
+		// 进度（仿 vim）：
+		//   - 基础：光标所在行百分比（ruler %p 的 calc_percentage，溢出安全）
+		//   - 视口边界状态（状态栏 %P 的 get_rel_pos）：整个文件可见显示 All、
+		//     视口顶贴文件首行显示 Top、视口底贴文件末行显示 Bot。
+		pct := calcPercentage(rowLine+1, total)
+		progress := fmt.Sprintf("%d%%%%", pct)
+		if vp := m.viewportProgress(); vp == "Top" || vp == "Bot" || vp == "All" {
+			progress = vp
 		}
 		lnMode := ""
 		if lm := m.sm.LineNumMode(); lm != termd.LNNone {
 			lnMode = " " + lm.Name()
 		}
-		rightText = fmt.Sprintf("%d,%d  %d%%%%  %dL%s ", rowLine+1, col, pct, total, lnMode)
+		rightText = fmt.Sprintf("%d,%d  %s  %dL%s ", rowLine+1, col, progress, total, lnMode)
 	}
 	rulerStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("238")).Foreground(lipgloss.Color("252"))
@@ -176,6 +185,55 @@ func (m *EditorModel) renderCmdLine() string {
 	}
 	trailing := lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(strings.Repeat(" ", trailingW))
 	return pre + field.Render(body) + cursorBlock + trailing
+}
+
+// calcPercentage 计算 part/whole 的百分比（仿 vim 的 calc_percentage）：
+// part 很大时先用 part 除以 whole/100，避免 part*100 溢出（>21 亿行的超大文件）。
+func calcPercentage(part, whole int) int {
+	if whole <= 0 {
+		return 0
+	}
+	if part > 1_000_000 {
+		if w := whole / 100; w > 0 {
+			return part / w
+		}
+	}
+	return (part * 100) / whole
+}
+
+// viewportProgress 返回视口相对位置（仿 vim 状态栏 %P 的 get_rel_pos）：
+//   - All：整个文件都在视口内（below <= 0 且 above <= 0）；
+//   - Top：视口顶贴文件首行（above <= 0）；
+//   - Bot：视口底贴文件末行（below <= 0）；
+//   - NN%：否则为「视口顶部之上行数 / (之上+之下)」的百分比。
+//
+// 与 vim 一致，该进度基于视口（滚动）而非光标，适合在文件中快速定位“看到哪了”。
+func (m *EditorModel) viewportProgress() string {
+	top := m.scroll
+	total := m.Buf.LineCount()
+	viewH := m.contentHeight()
+	if m.sm.Mode() == termd.ModePreview {
+		top = m.previewScroll
+		if n := len(m.previewLines); n > 0 {
+			total = n // 预览以视觉行为准（block 渲染后 preview 行数 ≠ buffer 行数）
+		}
+	}
+	if total <= 0 || viewH <= 0 {
+		return "0%"
+	}
+	// 仿 vim：above = w_topline - 1（视口顶之上），below = line_count - w_botline + 1（视口底之下）。
+	above := top
+	below := total - (top + viewH)
+	if below <= 0 {
+		if above <= 0 {
+			return "All"
+		}
+		return "Bot"
+	}
+	if above <= 0 {
+		return "Top"
+	}
+	return fmt.Sprintf("%d%%", calcPercentage(above, above+below))
 }
 
 // cmdlineCursorGoto 返回把硬件光标定位到命令行输入框的 ANSI 序列（仿 vim 命令行）。
