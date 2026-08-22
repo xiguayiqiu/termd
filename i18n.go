@@ -345,6 +345,13 @@ var zhDict = map[string]string{
 	"开启光标闪烁（预览/命令模式的光标会闪烁）": "开启光标闪烁（预览/命令模式的光标会闪烁）",
 	":set nocursorblink": ":set nocursorblink",
 	"关闭光标闪烁（光标常亮不闪烁）":    "关闭光标闪烁（光标常亮不闪烁）",
+	// --- 光标形状 ---
+	":set cursor block":  ":set cursor block",
+	"光标形状: 块":       "光标形状: 块",
+	":set cursor bar":   ":set cursor bar",
+	"光标形状: 竖线":     "光标形状: 竖线",
+	":set cursor underline": ":set cursor underline",
+	"光标形状: 下划线":    "光标形状: 下划线",
 }
 
 // enDict 以「中文原文」为 key，值为英文译文。
@@ -669,6 +676,13 @@ var enDict = map[string]string{
 	"开启光标闪烁（预览/命令模式的光标会闪烁）": "Enable cursor blinking (cursor blinks in preview/command mode)",
 	":set nocursorblink": ":set nocursorblink",
 	"关闭光标闪烁（光标常亮不闪烁）":    "Disable cursor blinking (cursor stays solid)",
+	// --- 光标形状 ---
+	":set cursor block":  ":set cursor block",
+	"光标形状: 块":       "Cursor shape: block",
+	":set cursor bar":   ":set cursor bar",
+	"光标形状: 竖线":     "Cursor shape: bar",
+	":set cursor underline": ":set cursor underline",
+	"光标形状: 下划线":    "Cursor shape: underline",
 
 	// --- 鼠标 ---
 	"拖动可调整大纲宽度": "Drag to resize the outline width",
@@ -677,6 +691,16 @@ var enDict = map[string]string{
 	"平滑行滚动: 关闭（老终端兼容，改为全量重绘）":    "Smooth line scrolling: off (full repaint, for older terminals)",
 	"开启 vim 式行滚动（滚动区增量刷新，浏览更平滑）": "Enable smooth line scrolling (scroll-region incremental refresh)",
 	"关闭平滑行滚动（老终端兼容，改为全量重绘）":      "Disable smooth line scrolling (full repaint, for older terminals)",
+
+	// --- Doc 转换 ---
+	"运行错误: %v":                "Runtime error: %v",
+	"输入文件不存在: %s":            "Input file does not exist: %s",
+	"创建输出目录失败: %v":          "Failed to create output directory: %v",
+	"正在转换 ":                    "Converting ",
+	"转换失败: %v":                 "Conversion failed: %v",
+	"转换完成: %s (%.2f KB)":        "Conversion completed: %s (%.2f KB)",
+	"转换完成: %s (%.2f KB)\n":      "Conversion completed: %s (%.2f KB)\n",
+	"正在转换 %c":                  "Converting %c",
 }
 
 // InitI18N 依据环境变量检测当前语言。应在程序启动时调用一次。

@@ -1,7 +1,7 @@
 package core
 
 import (
-	"github.com/charmbracelet/bubbletea"
+	"charm.land/bubbletea/v2"
 	"termd"
 )
 
@@ -21,6 +21,22 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 返回滚动区命令（Preview 滚动平滑化）。
 		return m, m.handleMouse(msg)
 
+	case tea.PasteMsg:
+		// 粘贴（bracketed paste）：Preview 模式无插入语义，自动切到 Edit 插入态，
+		// 避免粘贴内容被 Preview 按键处理完全忽略（表现为“粘贴没有生效”）。
+		if m.sm.Mode() == termd.ModePreview {
+			if err := m.sm.EnterEdit(); err == nil {
+				m.cursorRow = clamp(m.previewCursor, 0, m.Buf.LineCount()-1)
+				m.cursorCol = 0
+				m.cursWant = 0
+				m.ensureCursorVisible()
+				m.status = termd.T("已粘贴（Preview 自动进入编辑）")
+			}
+			return m.handleInsertKey(tea.KeyPressMsg{Text: msg.Content})
+		}
+		// Edit 模式下直接处理粘贴内容
+		return m.handleInsertKey(tea.KeyPressMsg{Text: msg.Content})
+
 	case SwapTickMsg:
 		// 后台请求采集快照（编辑线程）：交给 termd.SwapManager 在 UI 线程内安全采集。
 		if m.Swap != nil {
@@ -38,7 +54,11 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// 键位帮助视图打开时，仅响应 Esc 关闭（其余按键忽略）
 		if m.helpMode {
-			if msg.String() == "esc" {
+			ks := ""
+			if km, ok := msg.(tea.KeyPressMsg); ok {
+				ks = km.Keystroke()
+			}
+			if ks == "esc" {
 				m.helpMode = false
 				m.status = termd.T("已关闭键位帮助")
 			}
@@ -46,7 +66,11 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// 命令模式帮助视图打开时，仅响应 Esc 关闭（其余按键忽略）
 		if m.cmdHelpMode {
-			if msg.String() == "esc" {
+			ks := ""
+			if km, ok := msg.(tea.KeyPressMsg); ok {
+				ks = km.Keystroke()
+			}
+			if ks == "esc" {
 				m.cmdHelpMode = false
 				m.status = termd.T("已关闭命令帮助")
 			}
@@ -54,12 +78,16 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Markdown 语法教程视图打开时：Esc 关闭，j/k/上下键/翻页键滚动教程内容
 		if m.markdownLangMode {
-			switch msg.String() {
+			ks := ""
+			if km, ok := msg.(tea.KeyPressMsg); ok {
+				ks = km.Keystroke()
+			}
+			switch ks {
 			case "esc":
 				m.markdownLangMode = false
 				m.mlScroll = 0
 				m.status = termd.T("已关闭 Markdown 语法教程")
-			case "j", "down", "pgdown", " ":
+			case "j", "down", "pgdown", "space":
 				m.mlScroll += max(1, m.contentHeight()-4)
 			case "k", "up", "pgup":
 				m.mlScroll -= max(1, m.contentHeight()-4)
@@ -78,20 +106,6 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fb != nil && m.fb.Opened {
 			return m.handleFileBrowserKey(msg)
 		}
-		// 粘贴（bracketed paste）：Preview 模式无插入语义，自动切到 Edit 插入态，
-		// 避免粘贴内容被 Preview 按键处理完全忽略（表现为“粘贴没有生效”）。
-		if msg.Paste && msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && m.sm.Mode() == termd.ModePreview {
-			if err := m.sm.EnterEdit(); err == nil {
-				m.cursorRow = clamp(m.previewCursor, 0, m.Buf.LineCount()-1)
-				m.cursorCol = 0
-				m.cursWant = 0
-				m.ensureCursorVisible()
-				m.status = termd.T("已粘贴（Preview 自动进入编辑）")
-			}
-			m2, c := m.handleInsertKey(msg)
-			m = m2.(*EditorModel)
-			return m, tea.Batch(c, tea.HideCursor)
-		}
 		// 集中控制硬件光标：编辑模式隐藏光标（用反显块表示位置），
 		// 预览/命令模式显示光标并定位到当前行（由 renderPreview 注入定位序列）。
 		var cmd tea.Cmd
@@ -109,19 +123,7 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m2.(*EditorModel)
 			cmd = c
 		}
-		if m.sm.Mode() == termd.ModePreview {
-			// 预览模式隐藏硬件光标（View 亦输出 ?25l 兜底），靠蓝底块指示当前行；
-			// 状态栏常驻显示，但硬件光标不落在状态栏位置。
-			cmd = tea.Batch(cmd, tea.HideCursor)
-		} else if m.sm.Mode() == termd.ModeEdit {
-			// 编辑模式同样隐藏硬件光标：光标行已由 renderEdit 注入蓝底块
-			// （RenderEditLineWithCursorStyled / insertCursor）指示输入位置，
-			// 若再显示硬件光标会与蓝底块重叠成“双光标”。
-			cmd = tea.Batch(cmd, tea.HideCursor)
-		} else {
-			// 命令模式显示硬件光标（命令行输入框定位）
-			cmd = tea.Batch(cmd, tea.ShowCursor)
-		}
+		// 光标控制已移至 View() 方法，通过 tea.View.Cursor 字段管理
 		return m, cmd
 
 	case tea.QuitMsg:

@@ -82,53 +82,62 @@ func (m *EditorModel) statusBar() string {
 		flags += "[+]"
 	}
 	leftText := fmt.Sprintf(" %s  %s %s %s ", mode, fname, encTag, flags)
-	// 防止左段超宽撑破整行（超宽会使 bubbletea 截断 View 末行，导致滚动序列的
-	// 滚动区恢复部分丢失）；截断到 width-1，至少留 1 列给右侧。
-	leftText = runewidth.Truncate(leftText, width-1, "…")
-	left := lipgloss.NewStyle().Background(mc.bg).Foreground(mc.fg).Render(leftText)
-
-	// ---- 右段：优先显示状态消息（命令反馈），否则显示标尺 ----
-	var rightText string
+	// 加入状态信息（如“就绪”），防止被挤到第二行
 	if m.status != "" {
-		// 命令反馈消息（如“已保存”），仿 vim 临时覆盖标尺区
-		rightText = " " + m.status + " "
-	} else {
-		// 标尺：行,列 / 进度分析 / 总行数 / 行号模式
-		rowLine := m.cursorRow
-		if m.sm.Mode() == termd.ModePreview {
-			rowLine = m.previewCursor
-		}
-		total := m.Buf.LineCount()
-		col := m.cursorCol + 1
-		// 进度（仿 vim）：
-		//   - 基础：光标所在行百分比（ruler %p 的 calc_percentage，溢出安全）
-		//   - 视口边界状态（状态栏 %P 的 get_rel_pos）：整个文件可见显示 All、
-		//     视口顶贴文件首行显示 Top、视口底贴文件末行显示 Bot。
-		pct := calcPercentage(rowLine+1, total)
-		progress := fmt.Sprintf("%d%%%%", pct)
-		if vp := m.viewportProgress(); vp == "Top" || vp == "Bot" || vp == "All" {
-			progress = vp
-		}
-		lnMode := ""
-		if lm := m.sm.LineNumMode(); lm != termd.LNNone {
-			lnMode = " " + lm.Name()
-		}
-		rightText = fmt.Sprintf("%d,%d  %s  %dL%s ", rowLine+1, col, progress, total, lnMode)
+		leftText += m.status + " "
 	}
-	rulerStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("238")).Foreground(lipgloss.Color("252"))
-	right := rulerStyle.Render(rightText)
 
-	// ---- 计算左右段纯宽度，中间补空格占满整行 ----
-	leftW := runewidth.StringWidth(stripANSIForWidth(leftText))
-	rightW := runewidth.StringWidth(stripANSIForWidth(rightText))
-	pad := width - leftW - rightW
-	if pad < 0 {
-		// 宽度不足：优先保证左段，截断右段
-		pad = 0
-		right = ""
+	// ---- 右段：标尺（永远显示，含进度百分比）----
+	rowLine := m.cursorRow
+	if m.sm.Mode() == termd.ModePreview {
+		rowLine = m.previewCursor
 	}
-	mid := rulerStyle.Render(strings.Repeat(" ", pad))
+	total := m.Buf.LineCount()
+	col := m.cursorCol + 1
+	pct := calcPercentage(rowLine+1, total)
+	progress := fmt.Sprintf("%d%%", pct)
+	lnMode := ""
+	if lm := m.sm.LineNumMode(); lm != termd.LNNone {
+		lnMode = " " + lm.Name()
+	}
+	rightText := fmt.Sprintf("%d,%d  %s  %dL%s ", rowLine+1, col, progress, total, lnMode)
+	rulerStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255"))
+
+	// ---- 计算视觉宽度（去 ANSI），确保整行填满 ----
+	// 右段固定宽度（优先完整显示）
+	rightPlain := stripANSIForWidth(rightText)
+	rightW := runewidth.StringWidth(rightPlain)
+
+	// 左段实际宽度
+	leftPlain := stripANSIForWidth(leftText)
+	leftW := runewidth.StringWidth(leftPlain)
+
+	// 计算可用于中间填充的空间 = 总宽 - 左段 - 右段
+	// 如果左段过宽，截断左段（保留模式块）
+	minLeftW := 4 // 最小左段宽度（模式块）
+	maxLeftW := width - rightW - minLeftW
+	if maxLeftW < minLeftW {
+		maxLeftW = minLeftW
+	}
+	if leftW > maxLeftW {
+		leftText = runewidth.Truncate(leftText, maxLeftW, "…")
+		leftPlain = stripANSIForWidth(leftText)
+		leftW = runewidth.StringWidth(leftPlain)
+	}
+
+	// 中间填充宽度 = 总宽 - 左段分配宽度(maxLeftW) - 右段宽
+	// 左段已填充到 maxLeftW，所以用 maxLeftW 而非 leftW
+	midW := width - maxLeftW - rightW
+	if midW < 0 {
+		midW = 0
+	}
+
+	// 渲染三段：左段用模式块背景，中间和右段用 ruler 背景（视觉连贯）
+	leftPadded := leftPlain + strings.Repeat(" ", maxLeftW-leftW)
+	left := lipgloss.NewStyle().Background(mc.bg).Foreground(mc.fg).Render(leftPadded)
+	mid := rulerStyle.Render(strings.Repeat(" ", midW))
+	right := rulerStyle.Render(rightPlain)
 	return left + mid + right
 }
 

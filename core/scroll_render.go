@@ -11,7 +11,7 @@ package core
 //   3. 每帧只输出 lines[yOffset : yOffset+height] 这一可见切片，交给 bubbletea
 //      的逐行 diff 只重绘变化行 —— 不依赖终端滚动区，天然正确、平滑、可回退。
 //
-// 旧实现（DECSTBM + CSI S/termd.T 终端物理滚动 + 冻结帧）会与 bubbletea 的行 diff
+// 旧实现（DECSTBM + CSI S/T 终端物理滚动 + 冻结帧）会与 bubbletea 的行 diff
 // 渲染器失步：终端内容被物理移动而 bubbletea 的屏幕状态不知道，导致内容错位、
 // 光标消失、滚动“跳一大片”。本模块彻底移除该机制，Preview 与 Edit 都改为
 // 视觉行偏移滚动（vim 的 topline / mouse_vert_step 语义）：
@@ -25,7 +25,7 @@ package core
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbletea"
+	"charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"termd"
 )
@@ -140,73 +140,17 @@ func (m *EditorModel) previewVisibleRows(ch int) []string {
 	return rows
 }
 
-// initScrollRegionCmd 初始化内容区终端滚动区（第一次滚动时全量绘制内容区，
-// 之后的滚动用 ScrollDown/ScrollUp 增量，物理移动内容行，避免整屏重绘闪烁）。
-// 边界约定：top=0, bottom=contentHeight（0-based View 行，同时被 renderer 用作
-// ignored 行范围；DECSTBM 侧 0 等价于第 1 行，恰好覆盖内容区）。
+// initScrollRegionCmd 初始化内容区滚动（v2 中无需物理滚动区，仅标记需要重绘）。
 func (m *EditorModel) initScrollRegionCmd() tea.Cmd {
-	ch := m.contentHeight()
-	if ch < 1 || len(m.previewLines) == 0 {
-		return nil
-	}
-	rows := m.previewVisibleRows(ch)
-	m.scrollActive = true
-	m.scrollContent = rows
-	return tea.SyncScrollArea(rows, 0, ch)
+	// v2 中通过重新渲染 View() 处理滚动，无需终端物理滚动区
+	m.previewDirty = true
+	return nil
 }
 
-// incrementalScrollCmd 生成内容区滚动序列：视口移动了 shift 个视觉行。
-//   - 连续小滚动（|shift| < ch 且前后内容连续）→ ScrollDown/ScrollUp 增量；
-//   - 大跳变 / 内容已变（连续性检查失败）→ SyncScrollArea 全量重绘内容区一次。
-func (m *EditorModel) incrementalScrollCmd(shift int) tea.Cmd {
-	if !m.scrollActive || shift == 0 {
-		return nil
-	}
-	ch := m.contentHeight()
-	if ch < 1 || len(m.previewLines) == 0 {
-		return nil
-	}
-	rows := m.previewVisibleRows(ch)
-	if len(m.scrollContent) != ch || abs(shift) >= ch {
-		// 高度变化或翻页级跳变：全量重新同步内容区
-		m.scrollActive = true
-		m.scrollContent = rows
-		return tea.SyncScrollArea(rows, 0, ch)
-	}
-	if shift > 0 {
-		// 下滚：新内容前缀 == 旧内容后缀（连续性验证，失败说明内容已被编辑/重建）
-		for i := 0; i < ch-shift; i++ {
-			if rows[i] != m.scrollContent[i+shift] {
-				m.scrollActive = true
-				m.scrollContent = rows
-				return tea.SyncScrollArea(rows, 0, ch)
-			}
-		}
-		m.scrollContent = rows
-		return tea.ScrollDown(rows[ch-shift:], 0, ch)
-	}
-	n := -shift
-	for i := 0; i < ch-n; i++ {
-		if rows[i+n] != m.scrollContent[i] {
-			m.scrollActive = true
-			m.scrollContent = rows
-			return tea.SyncScrollArea(rows, 0, ch)
-		}
-	}
-	m.scrollContent = rows
-	return tea.ScrollUp(rows[:n], 0, ch)
-}
-
-// clearScrollRegionCmd 清除内容区终端滚动区，把内容区渲染交还给 bubbletea。
-// 用于：进入编辑/命令模式、开关大纲、resize、光标块独立移动（j/k）等场景。
-// 注意 ClearScrollArea() 返回 Msg 而非 Cmd，需包一层。
+// clearScrollRegionCmd 清除滚动状态（v2 中无需物理滚动区）。
 func (m *EditorModel) clearScrollRegionCmd() tea.Cmd {
-	if !m.scrollActive {
-		return nil
-	}
-	m.scrollActive = false
-	m.scrollContent = nil
-	return func() tea.Msg { return tea.ClearScrollArea() }
+	m.previewDirty = true
+	return nil
 }
 
 // centerPreviewOnCursor 把视口居中定位到当前光标行（仿 vim zz，用于 :数字 / /搜索 跳转）。

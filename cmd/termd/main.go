@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"termd"
 	"termd/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ZeroHawkeye/wordZero/pkg/document"
+	"github.com/ZeroHawkeye/wordZero/pkg/markdown"
+	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/termenv"
 )
 
@@ -60,6 +64,10 @@ func usageText() string {
 		"  -v, --version   " + termd.T("显示版本号并退出") + "\n" +
 		"  -rc             " + termd.T("显示 ~/.termdrc 可用设置项并退出") + "\n" +
 		"  -ml             " + termd.T("显示 termd 支持的 Markdown 语法教程并退出") + "\n" +
+		"  -doc            " + termd.T("将 Markdown 文件转换为 docx") + "\n" +
+		"      " + termd.T("termd -doc xxx.md .           # 转换到当前目录，文件名为 xxx.docx") + "\n" +
+		"      " + termd.T("termd -doc xxx.md ./output    # 转换到指定目录，文件名为 xxx.docx") + "\n" +
+		"      " + termd.T("termd -doc xxx.md out.docx    # 指定输出文件路径") + "\n" +
 		"\n" +
 		termd.T("文件:") + "\n" +
 		"  " + termd.T("可选，启动后打开并编辑指定文件（缺省为新建未命名缓冲区）") + "\n"
@@ -82,6 +90,9 @@ func rcHelpText() string {
 		"  nonu / nonumber / norelativenumber  " + termd.T("关闭行号") + termd.T("（默认）") + "\n" +
 		"  cursorblink                 " + termd.T("开启硬件光标闪烁") + termd.T("（默认开启）") + "\n" +
 		"  nocursorblink               " + termd.T("关闭硬件光标闪烁") + termd.T("（默认关闭）") + "\n" +
+		"  cursor block                " + termd.T("光标形状：块（默认）") + "\n" +
+		"  cursor bar                  " + termd.T("光标形状：竖线") + "\n" +
+		"  cursor underline            " + termd.T("光标形状：下划线") + "\n" +
 		"  fileicons                   " + termd.T("文件浏览器渲染 Nerd Font 图标（需 Nerd Font 终端）") + termd.T("（默认关闭）") + "\n" +
 		"  nofileicons                 " + termd.T("关闭文件浏览器图标") + termd.T("（默认）") + "\n" +
 		"  smoothscroll                " + termd.T("开启 vim 式平滑滚动（按视觉行滚动，滚轮/翻页逐屏幕行移动）") + termd.T("（默认开启）") + "\n" +
@@ -90,6 +101,7 @@ func rcHelpText() string {
 		termd.T("示例:") + "\n" +
 		"  set nu\n" +
 		"  cursorblink\n" +
+		"  cursor bar\n" +
 		"  fileicons\n" +
 		"\n" +
 		termd.T("运行 `termd -rc` 查看本帮助；编辑中也可 :set <项> 即时切换。") + "\n"
@@ -102,7 +114,8 @@ func main() {
 	// 解析全局命令行标志（--help/-h、--version/-v），其余参数视为待编辑文件路径
 	args := os.Args[1:]
 	var pathArgs []string
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch a {
 		case "-h", "--help":
 			fmt.Print(usageText())
@@ -116,6 +129,30 @@ func main() {
 		case "-ml":
 			// 打印 Markdown 语法教程后退出（内容见 termd.MarkdownLanguage.go）
 			fmt.Print(termd.RenderMarkdownLanguage())
+			return
+		case "-doc":
+			// Markdown 转 docx 功能
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, termd.T("错误: -doc 需要指定输入文件"))
+				fmt.Fprintln(os.Stderr, termd.T("用法: termd -doc <输入.md> [输出目录或文件]"))
+				fmt.Fprintln(os.Stderr, termd.T("      termd -doc xxx.md .          # 转换到当前目录，文件名为 xxx.docx"))
+				fmt.Fprintln(os.Stderr, termd.T("      termd -doc xxx.md ./output   # 转换到指定目录，文件名为 xxx.docx"))
+				os.Exit(1)
+			}
+			inputFile := args[i+1]
+			i++ // 跳过输入文件参数
+			
+			// 可选的输出路径（目录或文件）
+			var outputPath string
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				outputPath = args[i+1]
+				i++
+			}
+			
+			if err := convertMarkdownToDocx(inputFile, outputPath); err != nil {
+				fmt.Fprintf(os.Stderr, termd.T("转换失败: %v\n"), err)
+				os.Exit(1)
+			}
 			return
 		default:
 			pathArgs = append(pathArgs, a)
@@ -132,7 +169,56 @@ func main() {
 		path = pathArgs[0]
 	}
 
-	model, err := core.NewModel(path)
+	// 崩溃恢复检查：在加载文件前检查 .swp 文件状态
+	var swapLines [][]byte
+	var recoverMode bool
+	if path != "" {
+		absPath, _ := filepath.Abs(path)
+		swapPath := termd.SwapPathFor(absPath)
+		state, meta, err := termd.CheckSwapState(swapPath, os.Getpid(), nil)
+		if err == nil {
+			switch state {
+			case termd.SwapStale:
+				// 发现崩溃现场，提示用户恢复选项
+				fmt.Fprint(os.Stderr, termd.RecoverySummary(state, meta))
+				fmt.Fprint(os.Stderr, "\n")
+				fmt.Fprint(os.Stderr, termd.T("选择操作: [r]恢复  [c]继续(丢弃未保存)  [d]删除交换文件: "))
+				
+				reader := bufio.NewReader(os.Stdin)
+				input, _ := reader.ReadString('\n')
+				input = strings.TrimSpace(strings.ToLower(input))
+				
+				switch input {
+				case "r", "recover":
+					// 读取 swap 文件内容用于恢复
+					if meta != nil {
+						_, swapLines, _ = termd.ReadSwapFile(swapPath)
+						recoverMode = true
+					}
+				case "d", "delete":
+					// 删除交换文件
+					_ = termd.RemoveSwapFile(swapPath)
+				case "c", "continue":
+					// 继续，不恢复，删除交换文件
+					_ = termd.RemoveSwapFile(swapPath)
+				default:
+					// 默认删除交换文件继续
+					_ = termd.RemoveSwapFile(swapPath)
+				}
+			case termd.SwapActive:
+				// 文件正在被其他实例编辑
+				fmt.Fprintf(os.Stderr, termd.T("警告: %s\n"), termd.RecoverySummary(state, meta))
+				fmt.Fprint(os.Stderr, termd.T("将以只读模式打开。按 Enter 继续..."))
+				bufio.NewReader(os.Stdin).ReadString('\n')
+			case termd.SwapCorrupt:
+				fmt.Fprintf(os.Stderr, termd.T("警告: %s\n"), termd.RecoverySummary(state, meta))
+				fmt.Fprint(os.Stderr, termd.T("按 Enter 继续..."))
+				bufio.NewReader(os.Stdin).ReadString('\n')
+			}
+		}
+	}
+
+	model, err := core.NewModel(path, swapLines, recoverMode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, termd.T("初始化失败: %v\n"), err)
 		os.Exit(1)
@@ -142,18 +228,10 @@ func main() {
 	// 同步 termenv 能力到 renderer
 	model.Rend.SetProfile(profile)
 
-	// 启动 bubbletea：使用 AltScreen 获得全屏终端体验，并捕获 Ctrl+C 作为退出。
-	// termd.WithFcitx5() 注入 fcitx5 输入法适配：启用焦点报告以正确解析 \x1b[I / \x1b[O，
-	// 避免输入法激活时随机插入 i/o 等乱序字符。
-	p := tea.NewProgram(model,
-		append(
-			[]tea.ProgramOption{
-				tea.WithAltScreen(),       // 全屏
-				tea.WithMouseCellMotion(), // 鼠标移动（预留）
-			},
-			termd.WithFcitx5()...,
-		)...,
-	)
+// 启动 bubbletea：v2 中 AltScreen 和 MouseMode 由 View() 返回的 tea.View 控制。
+// termd.WithFcitx5() 注入 fcitx5 输入法适配：启用焦点报告以正确解析 \x1b[I / \x1b[O，
+// 避免输入法激活时随机插入 i/o 等乱序字符。
+p := tea.NewProgram(model, termd.WithFcitx5()...)
 	// 注入异步消息通道：后台图片加载完成时用于触发重绘（非阻塞，避免卡死 UI）
 	model.SendMsg = func(msg tea.Msg) { p.Send(msg) }
 
@@ -177,11 +255,96 @@ func main() {
 	}
 
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "运行错误: %v\n", err)
+		fmt.Fprintf(os.Stderr, termd.T("运行错误: %v\n"), err)
 		os.Exit(1)
 	}
 	// 正常退出：优雅停止后台写盘并删除 .swp（干净退出，无需恢复）。
 	if model.Swap != nil {
 		model.Swap.Stop()
+	}
+	// 释放文件锁
+	model.Buf.UnlockFile()
+}
+
+// convertMarkdownToDocx 将 Markdown 文件转换为 docx 文件
+func convertMarkdownToDocx(inputFile, outputPath string) error {
+	// 检查输入文件是否存在
+	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
+		return fmt.Errorf(termd.T("输入文件不存在: %s"), inputFile)
+	}
+
+	// 确定输出文件路径
+	var outputFile string
+	
+	if outputPath == "" || outputPath == "." {
+		// 未指定或指定当前目录：使用源文件名 + .docx 在当前目录
+		baseName := filepath.Base(inputFile)
+		outputFile = strings.TrimSuffix(baseName, filepath.Ext(baseName)) + ".docx"
+	} else {
+		// 检查 outputPath 是否为目录
+		info, err := os.Stat(outputPath)
+		if err == nil && info.IsDir() {
+			// 是目录：使用源文件名 + .docx 在该目录
+			baseName := filepath.Base(inputFile)
+			fileName := strings.TrimSuffix(baseName, filepath.Ext(baseName)) + ".docx"
+			outputFile = filepath.Join(outputPath, fileName)
+		} else if strings.HasSuffix(outputPath, "/") || strings.HasSuffix(outputPath, "\\") {
+			// 以分隔符结尾视为目录
+			baseName := filepath.Base(inputFile)
+			fileName := strings.TrimSuffix(baseName, filepath.Ext(baseName)) + ".docx"
+			outputFile = filepath.Join(outputPath, fileName)
+		} else if os.IsNotExist(err) && !strings.HasSuffix(strings.ToLower(outputPath), ".docx") {
+			// 路径不存在且没有 .docx 后缀：视为目录（自动创建）
+			baseName := filepath.Base(inputFile)
+			fileName := strings.TrimSuffix(baseName, filepath.Ext(baseName)) + ".docx"
+			outputFile = filepath.Join(outputPath, fileName)
+		} else {
+			// 作为文件路径处理
+			outputFile = outputPath
+		}
+	}
+
+	// 确保输出目录存在
+	outputDir := filepath.Dir(outputFile)
+	if outputDir != "" && outputDir != "." {
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return fmt.Errorf(termd.T("创建输出目录失败: %v"), err)
+		}
+	}
+
+	// 使用 wordZero 进行转换
+	converter := markdown.NewConverter(markdown.DefaultOptions())
+	
+	// 禁用 wordZero 的 INFO 日志输出，避免干扰 Spinner 动画
+	document.SetGlobalLevel(document.LogLevelSilent)
+	
+	// Spinner 动画
+	spinner := []rune{'|', '/', '-', '\\'}
+	done := make(chan error, 1)
+	go func() {
+		done <- converter.ConvertFile(inputFile, outputFile, nil)
+	}()
+	
+	i := 0
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	fmt.Fprint(os.Stderr, termd.T("正在转换 "))
+	for {
+		select {
+		case err := <-done:
+			ticker.Stop()
+			fmt.Fprint(os.Stderr, "\r\033[K") // 清除当前行
+			if err != nil {
+				return fmt.Errorf(termd.T("转换失败: %v"), err)
+			}
+			// 获取文件大小
+			info, _ := os.Stat(outputFile)
+			size := info.Size()
+			fmt.Fprintf(os.Stderr, termd.T("转换完成: %s (%.2f KB)\n"), outputFile, float64(size)/1024)
+			return nil
+		case <-ticker.C:
+			fmt.Fprintf(os.Stderr, termd.T("正在转换 %c"), spinner[i%4])
+			i++
+		}
 	}
 }

@@ -16,6 +16,8 @@ type TermdConfig struct {
 	LineNum termd.LineNumMode
 	// Blink 硬件光标是否闪烁（对应 :set cursorblink / :set nocursorblink）。
 	Blink bool
+	// CursorShape 光标形状：block(块) / bar(竖线) / underline(下划线)
+	CursorShape int
 	// FileIcons 文件浏览器是否渲染 Nerd Font 图标（仅 Nerd Font 终端有效）。
 	FileIcons bool
 	// SmoothScroll vim 式行滚动是否启用（对应 :set smoothscroll / :set nosmoothscroll）。
@@ -40,14 +42,20 @@ const TermdrcName = ".termdrc"
 //	set numberone / set norelativenumber
 //	set cursorblink     开启光标闪烁
 //	set nocursorblink   关闭光标闪烁
+//	set cursor block    光标形状：块（默认）
+//	set cursor bar      光标形状：竖线
+//	set cursor underline 光标形状：下划线
 //	set fileicons       开启文件浏览器 Nerd Font 图标（需 Nerd Font 终端）
 //	set nofileicons     关闭文件浏览器图标（普通终端默认）
+//	set smoothscroll    开启 vim 式平滑滚动
+//	set nosmoothscroll  关闭平滑滚动
 //
 // “set ”前缀可省略，直接写 “nu” 亦可。
 func LoadTermdrc() *TermdConfig {
 	cfg := &TermdConfig{
 		LineNum:      termd.LNNone,
 		Blink:        true,  // 与运行时默认一致
+		CursorShape:  0,     // 0=block(块), 1=underline(下划线), 2=bar(竖线)
 		FileIcons:    false, // 默认关闭：普通终端无 Nerd Font 字形，避免方块乱码
 		SmoothScroll: true,  // 与运行时默认一致
 	}
@@ -82,6 +90,12 @@ func LoadTermdrc() *TermdConfig {
 			cfg.Blink = true
 		case "nocursorblink":
 			cfg.Blink = false
+		case "cursor block":
+			cfg.CursorShape = 0
+		case "cursor bar":
+			cfg.CursorShape = 2
+		case "cursor underline":
+			cfg.CursorShape = 1
 		case "fileicons":
 			cfg.FileIcons = true
 		case "nofileicons":
@@ -99,6 +113,7 @@ func LoadTermdrc() *TermdConfig {
 func (c *TermdConfig) ApplyTo(m *EditorModel) {
 	m.sm.SetLineNum(c.LineNum)
 	m.blinkMode = c.Blink
+	m.cursorShape = c.CursorShape
 	m.smoothScroll = c.SmoothScroll
 	// 文件浏览器图标开关（Nerd Font 终端才应开启）
 	termd.FBUseIcons = c.FileIcons

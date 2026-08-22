@@ -1,11 +1,15 @@
 package core
 
 import (
+	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
 	"termd"
 
-	"github.com/charmbracelet/bubbletea"
+	"charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -106,6 +110,12 @@ func (m *EditorModel) handlePreviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.previewLines) > 0 {
 			m.previewScroll = clamp(m.previewScroll+max(1, ch-1), 0, max(0, len(m.previewLines)-ch))
 			m.setPreviewCursorToRow(m.previewScroll + ch - 1)
+		}
+	case "d": // "dd" 删除当前行（仿 vim dd）
+		if m.handleDoubleKey("d") {
+			m.deleteCurrentPreviewLine()
+			m.previewDirty = true
+			m.status = termd.Tf("已删除第 %d 行", m.previewCursor+1)
 		}
 	}
 	// 光标移动后重建渲染：使“光标是否落在代码块/表格内”的降级逻辑即时生效
@@ -457,4 +467,88 @@ func injectPreviewColBlock(s string, dispCol int) string {
 		return cursorStyle.Render(" ")
 	}
 	return string(runes[:last]) + cursorStyle.Render(string(runes[last])) + "\x1b[0m" + string(runes[last+1:])
+}
+
+// handleDoubleKey 处理双击按键（如 dd, yy），返回 true 表示已处理完毕（第二次按键已确认）。
+func (m *EditorModel) handleDoubleKey(key string) bool {
+	if m.lastKey == key && time.Since(m.lastKeyTime) < 500*time.Millisecond {
+		m.lastKey = ""
+		return true
+	}
+	m.lastKey = key
+	m.lastKeyTime = time.Now()
+	return false
+}
+
+// deleteCurrentPreviewLine 删除预览模式下当前高亮行（仿 vim dd）。
+func (m *EditorModel) deleteCurrentPreviewLine() {
+	if m.Buf.LineCount() <= 1 {
+		return // 至少保留一行
+	}
+	m.Buf.DeleteLine(m.previewCursor)
+	if m.previewCursor >= m.Buf.LineCount() {
+		m.previewCursor = m.Buf.LineCount() - 1
+	}
+	m.ensurePreviewCursorVisible()
+}
+
+// linkTargetAtDispCol 检查预览模式下指定 buffer 行和显示列位置是否有链接，
+// 返回链接目标（URL、文件路径或锚点），无则返回空字符串。
+func (m *EditorModel) linkTargetAtDispCol(row, dispCol int) string {
+	if row < 0 || row >= m.Buf.LineCount() {
+		return ""
+	}
+	line := string(m.Buf.GetLine(row))
+	// 简化实现：查找行中的 Markdown 链接 [text](url)
+	// 实际应按显示列精确匹配，这里返回行内第一个链接
+	linkRE := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	matches := linkRE.FindAllStringSubmatchIndex(line, -1)
+	for _, match := range matches {
+		// match[0], match[1] = 整个匹配的起止
+		// match[2], match[3] = 第一个捕获组 [text]
+		// match[4], match[5] = 第二个捕获组 (url)
+		if match[4] >= 0 && match[5] <= len(line) {
+			url := line[match[4]:match[5]]
+			// 简单的列位置检查：如果 dispCol 在链接文本范围内
+			if dispCol >= match[2] && dispCol <= match[3] {
+				return url
+			}
+		}
+	}
+	return ""
+}
+
+// openLink 打开链接：http(s) 用浏览器，本地路径用 xdg-open/open，锚点跳转。
+func (m *EditorModel) openLink(target string) {
+	// 先检查是否为文档内锚点链接
+	if relPath, anchor, ok := splitAnchorTarget(target); ok {
+		if relPath == "" {
+			// 当前文档内跳转
+			m.jumpToAnchor(anchor)
+			return
+		}
+		// 其它 md 文件锚点：加载文件再跳转
+		if err := m.loadFile(relPath); err == nil {
+			m.jumpToAnchor(anchor)
+		} else {
+			m.status = termd.T("打开文件失败: ") + err.Error()
+		}
+		return
+	}
+	// 外部链接：用系统默认程序打开
+	var cmd *exec.Cmd
+	switch {
+	case strings.HasPrefix(target, "http://"), strings.HasPrefix(target, "https://"):
+		cmd = exec.Command("xdg-open", target)
+	case strings.HasPrefix(target, "file://"):
+		cmd = exec.Command("xdg-open", strings.TrimPrefix(target, "file://"))
+	default:
+		// 本地文件路径
+		cmd = exec.Command("xdg-open", target)
+	}
+	if err := cmd.Start(); err != nil {
+		m.status = termd.T("打开链接失败: ") + err.Error()
+	} else {
+		m.status = termd.T("已打开: ") + target
+	}
 }

@@ -68,6 +68,11 @@ func (r *Renderer) SetWrap(w int) {
 	r.wrap = w
 }
 
+// Profile 返回渲染器使用的 termenv.Profile（用于图片渲染的色彩能力检测）。
+func (r *Renderer) Profile() termenv.Profile {
+	return r.profile
+}
+
 // Styles 集中管理所有视觉样式，避免样式散落。
 type Styles struct {
 	H1     lipgloss.Style
@@ -361,7 +366,12 @@ func (r *Renderer) RenderLine(line []byte, preview bool, highlight string) strin
 //
 // 视觉效果：用户能看到 Markdown 语法高亮前缀，但行内字符不被任何会改变显示宽度的样式干扰，
 // 光标列与实际输入位置完全一致。
-func (r *Renderer) RenderEditLineWithCursor(line []byte, cursorCol int) string {
+// 当 showCursor=false 时，不注入蓝底光标块（用于硬件光标模式）。
+func (r *Renderer) RenderEditLineWithCursor(line []byte, cursorCol int, showCursor ...bool) string {
+	show := true
+	if len(showCursor) > 0 {
+		show = showCursor[0]
+	}
 	s := string(line)
 	trimmed := strings.TrimLeft(s, " \t")
 	indent := s[:len(s)-len(trimmed)]
@@ -375,28 +385,33 @@ func (r *Renderer) RenderEditLineWithCursor(line []byte, cursorCol int) string {
 	task := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
 	codeBg := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
 
+	cursorFunc := insertCursor
+	if !show {
+		cursorFunc = func(s string, col int) string { return s }
+	}
+
 	switch {
 	case strings.HasPrefix(trimmed, "# "):
-		return indent + hl.Render(trimmed[:2]) + insertCursor(trimmed[2:], insertAt-2)
+		return indent + hl.Render(trimmed[:2]) + cursorFunc(trimmed[2:], insertAt-2)
 	case strings.HasPrefix(trimmed, "## "):
-		return indent + hl.Render(trimmed[:3]) + insertCursor(trimmed[3:], insertAt-3)
+		return indent + hl.Render(trimmed[:3]) + cursorFunc(trimmed[3:], insertAt-3)
 	case strings.HasPrefix(trimmed, "### "):
-		return indent + hl.Render(trimmed[:4]) + insertCursor(trimmed[4:], insertAt-4)
+		return indent + hl.Render(trimmed[:4]) + cursorFunc(trimmed[4:], insertAt-4)
 	case strings.HasPrefix(trimmed, "> "):
-		return indent + quote.Render(trimmed[:2]) + insertCursor(trimmed[2:], insertAt-2)
+		return indent + quote.Render(trimmed[:2]) + cursorFunc(trimmed[2:], insertAt-2)
 	case strings.HasPrefix(trimmed, "- [ ] "), strings.HasPrefix(trimmed, "* [ ] "):
-		return indent + task.Render(trimmed[:6]) + insertCursor(trimmed[6:], insertAt-6)
+		return indent + task.Render(trimmed[:6]) + cursorFunc(trimmed[6:], insertAt-6)
 	case strings.HasPrefix(trimmed, "- [x] "), strings.HasPrefix(trimmed, "* [x] "):
-		return indent + task.Render(trimmed[:6]) + insertCursor(trimmed[6:], insertAt-6)
+		return indent + task.Render(trimmed[:6]) + cursorFunc(trimmed[6:], insertAt-6)
 	case strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
-		return indent + list.Render(trimmed[:2]) + insertCursor(trimmed[2:], insertAt-2)
+		return indent + list.Render(trimmed[:2]) + cursorFunc(trimmed[2:], insertAt-2)
 	case isOrderedList(trimmed):
 		idx := strings.Index(trimmed, ". ")
-		return indent + list.Render(trimmed[:idx+2]) + insertCursor(trimmed[idx+2:], insertAt-(idx+2))
+		return indent + list.Render(trimmed[:idx+2]) + cursorFunc(trimmed[idx+2:], insertAt-(idx+2))
 	case strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~"):
-		return indent + codeBg.Render(insertCursor(trimmed, insertAt))
+		return indent + codeBg.Render(cursorFunc(trimmed, insertAt))
 	case strings.HasPrefix(trimmed, ": "):
-		return indent + list.Render(trimmed[:2]) + insertCursor(trimmed[2:], insertAt-2)
+		return indent + list.Render(trimmed[:2]) + cursorFunc(trimmed[2:], insertAt-2)
 	default:
 		_ = dim
 		return indent + insertCursor(trimmed, insertAt)
@@ -422,7 +437,11 @@ func (r *Renderer) RenderCommentLineWithCursor(line []byte, cursorCol int) strin
 // 不改变文本与显示宽度），再按显示列注入蓝底光标块，使光标列与输入位置严格对齐。
 // 与 RenderEditLineWithCursor 的区别仅在于主体会带行内语法着色，适合普通行/表格行；
 // 代码块内请使用原版 RenderEditLineWithCursor（避免代码中的 * 被误认为斜体标记）。
-func (r *Renderer) RenderEditLineWithCursorStyled(line []byte, cursorCol int) string {
+func (r *Renderer) RenderEditLineWithCursorStyled(line []byte, cursorCol int, showCursor ...bool) string {
+	show := true
+	if len(showCursor) > 0 {
+		show = showCursor[0]
+	}
 	s := string(line)
 	trimmed := strings.TrimLeft(s, " \t")
 	indent := s[:len(s)-len(trimmed)]
@@ -434,31 +453,47 @@ func (r *Renderer) RenderEditLineWithCursorStyled(line []byte, cursorCol int) st
 	task := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
 	switch {
 	case strings.HasPrefix(trimmed, "# "):
-		return indent + hl.Render(trimmed[:2]) + cursorBody(trimmed[2:], insertAt-2)
+		return indent + hl.Render(trimmed[:2]) + r.cursorBodyOrPlain(trimmed[2:], insertAt-2, show)
 	case strings.HasPrefix(trimmed, "## "):
-		return indent + hl.Render(trimmed[:3]) + cursorBody(trimmed[3:], insertAt-3)
+		return indent + hl.Render(trimmed[:3]) + r.cursorBodyOrPlain(trimmed[3:], insertAt-3, show)
 	case strings.HasPrefix(trimmed, "### "):
-		return indent + hl.Render(trimmed[:4]) + cursorBody(trimmed[4:], insertAt-4)
+		return indent + hl.Render(trimmed[:4]) + r.cursorBodyOrPlain(trimmed[4:], insertAt-4, show)
 	case strings.HasPrefix(trimmed, "> "):
-		return indent + quote.Render(trimmed[:2]) + cursorBody(trimmed[2:], insertAt-2)
+		return indent + quote.Render(trimmed[:2]) + r.cursorBodyOrPlain(trimmed[2:], insertAt-2, show)
 	case strings.HasPrefix(trimmed, "- [ ] "), strings.HasPrefix(trimmed, "* [ ] "):
-		return indent + task.Render(trimmed[:6]) + cursorBody(trimmed[6:], insertAt-6)
+		return indent + task.Render(trimmed[:6]) + r.cursorBodyOrPlain(trimmed[6:], insertAt-6, show)
 	case strings.HasPrefix(trimmed, "- [x] "), strings.HasPrefix(trimmed, "* [x] "):
-		return indent + task.Render(trimmed[:6]) + cursorBody(trimmed[6:], insertAt-6)
+		return indent + task.Render(trimmed[:6]) + r.cursorBodyOrPlain(trimmed[6:], insertAt-6, show)
 	case strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
-		return indent + list.Render(trimmed[:2]) + cursorBody(trimmed[2:], insertAt-2)
+		return indent + list.Render(trimmed[:2]) + r.cursorBodyOrPlain(trimmed[2:], insertAt-2, show)
 	case isOrderedList(trimmed):
 		idx := strings.Index(trimmed, ". ")
-		return indent + list.Render(trimmed[:idx+2]) + cursorBody(trimmed[idx+2:], insertAt-(idx+2))
+		return indent + list.Render(trimmed[:idx+2]) + r.cursorBodyOrPlain(trimmed[idx+2:], insertAt-(idx+2), show)
 	case strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~"):
 		// 代码围栏行：保持原样（不应用行内标记着色）
 		codeBg := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
-		return indent + codeBg.Render(insertCursor(trimmed, insertAt))
+		return indent + codeBg.Render(r.insertCursorOrPlain(trimmed, insertAt, show))
 	case strings.HasPrefix(trimmed, ": "):
-		return indent + list.Render(trimmed[:2]) + cursorBody(trimmed[2:], insertAt-2)
+		return indent + list.Render(trimmed[:2]) + r.cursorBodyOrPlain(trimmed[2:], insertAt-2, show)
 	default:
-		return indent + cursorBody(trimmed, insertAt)
+		return indent + r.cursorBodyOrPlain(trimmed, insertAt, show)
 	}
+}
+
+// cursorBodyOrPlain 根据 show 参数决定是否注入光标
+func (r *Renderer) cursorBodyOrPlain(body string, col int, show bool) string {
+	if show {
+		return cursorBody(body, col)
+	}
+	return highlightInlineMarks(body)
+}
+
+// insertCursorOrPlain 根据 show 参数决定是否注入光标
+func (r *Renderer) insertCursorOrPlain(s string, col int, show bool) string {
+	if show {
+		return insertCursor(s, col)
+	}
+	return s
 }
 
 // cursorBody 对无 ANSI 的主体串做行内标记着色（宽度不变），并按 rune 列 col 注入蓝底光标块。

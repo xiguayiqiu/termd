@@ -3,7 +3,10 @@ package termd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"syscall"
 )
 
 // Buffer 是编辑器的内存行缓存核心。
@@ -27,6 +30,8 @@ type Buffer struct {
 	// 由 SwapManager 通过 MarkDirty 让后台线程节流写盘。因在 bubbletea
 	// 单线程 Update 内同步调用，开销极小，绝不在回调里做重活。
 	notify func()
+	// lockFile 用于文件锁定，防止多进程同时编辑同一文件
+	lockFile *os.File
 }
 
 // NewBuffer 创建一个空缓冲区。
@@ -42,6 +47,12 @@ func NewBuffer() *Buffer {
 // 文件不存在时返回空缓冲区（视为新建文件），不视为错误。
 func (b *Buffer) LoadFile(path string) error {
 	b.filePath = path
+	
+	// 检查文件是否被其他进程锁定
+	if locked, pid := b.IsLocked(); locked {
+		return fmt.Errorf("文件正在被其他进程编辑 (PID: %d)，无法打开", pid)
+	}
+	
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -78,6 +89,86 @@ func (b *Buffer) SwapSnapshot() [][]byte {
 // FilePath 返回关联的磁盘文件路径（为空表示未命名缓冲区）。
 func (b *Buffer) FilePath() string {
 	return b.filePath
+}
+
+// SetFilePath 设置关联的文件路径（用于恢复模式）。
+func (b *Buffer) SetFilePath(path string) {
+	b.filePath = path
+}
+
+// LockFile 尝试获取文件独占锁（使用 flock，跨平台兼容）。
+// 返回 true 表示获取锁成功，false 表示文件已被其他进程锁定。
+// 锁文件为同目录下的 .文件名.swl（swap lock）。
+func (b *Buffer) LockFile() bool {
+	if b.filePath == "" {
+		return true // 未命名文件不需要锁
+	}
+	dir := filepath.Dir(b.filePath)
+	base := filepath.Base(b.filePath)
+	lockPath := filepath.Join(dir, "."+base+".swl")
+	
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return false
+	}
+	
+	// 尝试非阻塞独占锁
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		f.Close()
+		return false // 已被其他进程锁定
+	}
+	
+	b.lockFile = f
+	// 写入当前 PID 以便调试
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) // 确认锁
+	f.Truncate(0)
+	f.Seek(0, 0)
+	f.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
+	f.Sync()
+	return true
+}
+
+// UnlockFile 释放文件锁
+func (b *Buffer) UnlockFile() {
+	if b.lockFile != nil {
+		syscall.Flock(int(b.lockFile.Fd()), syscall.LOCK_UN)
+		b.lockFile.Close()
+		b.lockFile = nil
+	}
+}
+
+// IsLocked 检查文件是否被其他进程锁定（不获取锁，仅探测）
+func (b *Buffer) IsLocked() (bool, int) {
+	if b.filePath == "" {
+		return false, 0
+	}
+	dir := filepath.Dir(b.filePath)
+	base := filepath.Base(b.filePath)
+	lockPath := filepath.Join(dir, "."+base+".swl")
+	
+	f, err := os.OpenFile(lockPath, os.O_RDWR, 0o644)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, 0
+		}
+		return false, 0
+	}
+	defer f.Close()
+	
+	// 尝试获取共享锁来测试
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if err != nil {
+		// 读取 PID
+		data := make([]byte, 32)
+		n, _ := f.Read(data)
+		pid := 0
+		fmt.Sscanf(string(data[:n]), "%d", &pid)
+		return true, pid
+	}
+	// 能获取共享锁说明没被独占锁住
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false, 0
 }
 
 // SetNotify 注入内容变更回调（崩溃恢复用），返回原先的回调以便恢复。

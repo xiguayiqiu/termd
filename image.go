@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blacktop/go-termimg"
 	"github.com/muesli/termenv"
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
@@ -397,6 +398,31 @@ func renderImageHalfBlock(img image.Image, cols, rows int, profile termenv.Profi
 	return lines
 }
 
+// renderImageTermimg 使用 github.com/blacktop/go-termimg 渲染图片，
+// 自动探测终端支持的协议（Kitty/Sixel/iTerm2/Halfblocks）。
+func renderImageTermimg(img image.Image, cols, rows int) []string {
+	rendered, err := termimg.New(img).
+		Width(cols).
+		Height(rows).
+		Scale(termimg.ScaleFit).
+		Render()
+	if err != nil {
+		// 渲染失败，返回空
+		return nil
+	}
+	lines := strings.Split(rendered, "\n")
+	// 确保行数匹配，不足补空行，超出截断
+	if len(lines) < rows {
+		pad := strings.Repeat(" ", cols)
+		for len(lines) < rows {
+			lines = append(lines, pad)
+		}
+	} else if len(lines) > rows {
+		lines = lines[:rows]
+	}
+	return lines
+}
+
 // sampleImage 用盒式平均将图像重采样到 (w, h) 网格，返回每格平均色。
 func sampleImage(img image.Image, w, h int) [][]color.Color {
 	b := img.Bounds()
@@ -498,4 +524,10 @@ func ExtractBlockImage(trimmed string) (alt, url string, ok bool) {
 		return m[1], m[2], true
 	}
 	return "", "", false
+}
+
+// RenderImageLinesForPreview 为预览模式渲染图片行（公开 API，供 model_rebuild.go 调用）。
+// 这是 renderImageLines 的公开包装，便于外部调用。
+func RenderImageLinesForPreview(src string, cols int, profile termenv.Profile, notify func()) []string {
+	return renderImageLines(src, cols, profile, notify)
 }

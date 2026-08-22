@@ -1,7 +1,9 @@
 package core
 
 import (
-	"github.com/charmbracelet/bubbletea"
+	"time"
+
+	"charm.land/bubbletea/v2"
 	"github.com/muesli/termenv"
 	"termd"
 )
@@ -82,6 +84,10 @@ type EditorModel struct {
 	mouseDragStartW int // 开始拖拽时的大纲列宽
 	// blinkMode：硬件光标是否闪烁（默认开启；:set nocursorblink 可关闭）
 	blinkMode bool
+	// cursorShape：光标形状 0=block(块) 1=underline(下划线) 2=bar(竖线)
+	cursorShape int
+	// lastCursorStyle：上一次渲染时的光标样式编码，用于检测变化并注入转义序列
+	lastCursorStyle int
 	// smoothScroll：vim 式平滑滚动是否启用（默认开启；:set nosmoothscroll 可关闭，
 	// 退回"按 buffer 行移动光标"的兼容模式，老终端习惯）。
 	smoothScroll bool
@@ -94,14 +100,50 @@ type EditorModel struct {
 	// sendMsg 向 bubbletea 主循环注入消息（后台图片加载完成时触发重绘）。
 	// 由 main.go 在创建 Program 后注入 *tea.Program.Send。
 	SendMsg func(tea.Msg)
+
+	// 双击按键记录（用于 dd, yy 等双击命令）
+	lastKey     string
+	lastKeyTime time.Time
+
+	// 寄存器（Vim 风格）：无名寄存器 " 和 0-9a-z 命名寄存器
+	// 默认使用无名寄存器 "
+	registers map[string]string
+	// 最后一次 yank 的内容（用于 "0 寄存器）
+	lastYank string
+	// 最后一次编辑操作（用于 . 重复）
+	lastEdit  func()
 }
 
 // NewModel 构造编辑器模型。
-func NewModel(path string) (*EditorModel, error) {
+// swapLines: 从交换文件恢复的行内容（用于崩溃恢复）
+// recoverMode: 是否处于恢复模式
+func NewModel(path string, swapLines [][]byte, recoverMode bool) (*EditorModel, error) {
 	buf := termd.NewBuffer()
-	if err := buf.LoadFile(path); err != nil {
-		return nil, err
+	
+	if recoverMode && swapLines != nil {
+		// 恢复模式：使用 swap 文件的内容
+		buf.Lines = swapLines
+		buf.SetFilePath(path)
+		buf.IsDirty = true // 标记为脏，需要保存
+		buf.Encoding = termd.Encoding{Name: termd.EncUTF8, UTF8: true}
+		if len(buf.Lines) == 0 {
+			buf.Lines = make([][]byte, 1)
+		}
+	} else {
+		// 正常模式：从文件加载
+		if err := buf.LoadFile(path); err != nil {
+			return nil, err
+		}
 	}
+	
+	// 尝试获取文件锁（防止多进程同时编辑）
+	if path != "" && !recoverMode {
+		if !buf.LockFile() {
+			// 无法获取锁，以只读模式打开
+			buf.IsDirty = false
+		}
+	}
+	
 	rend := termd.NewRenderer()
 	rend.SetProfile(termenv.ColorProfile()) // 实际能力在 main 中按终端设置
 	return &EditorModel{
@@ -112,13 +154,16 @@ func NewModel(path string) (*EditorModel, error) {
 		status:       "就绪",
 		previewDirty: true,
 		blinkMode:    true,             // 光标闪烁默认开启
+		cursorShape:  0,                // 0=block(块), 1=underline(下划线), 2=bar(竖线)
 		smoothScroll: true,             // vim 式行滚动默认开启
-		SendMsg:      func(tea.Msg) {}, // 占位；main.go 会注入真实 *Program.Send
+		SendMsg:      func(tea.Msg) {}, // 占位；main.go 会注入真实 *tea.Program.Send
+		registers:  map[string]string{"": "", "0": ""}, // 无名寄存器 + 0 寄存器
 	}, nil
 }
 
 // Init 实现 bubbletea.Model（无异步启动任务）。
-func (m *EditorModel) Init() tea.Cmd { return tea.ShowCursor }
+// v2 中光标显示由 View() 中的 tea.View.Cursor 控制，无需 ShowCursor 命令。
+func (m *EditorModel) Init() tea.Cmd { return nil }
 
 // runeColToByte 将 rune 列转换为字节列，确保光标落在正确字节起点。
 func runeColToByte(line []byte, col int) int {

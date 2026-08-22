@@ -16,16 +16,13 @@ import (
 //   - 每个 buffer 行对应一个预览块；块内多行渲染结果共享该 buffer 行号（行号列
 //     仅首行显示，其余留空），维持与编辑态的 1:1 行号对应。
 func (m *EditorModel) rebuildPreview() {
-	// 行号列宽：仅在编辑模式（termd.ModeEdit）下渲染行号；预览模式为沉浸式阅读，
-	// 不应渲染行号（否则行号前缀会被 markdown 语法误解析/显示错乱）。
+	// 行号列宽：编辑/预览模式下均按用户设置渲染行号（:set nu/rnu）。
 	const editLineNumCol = 5 // 与 renderLineNum 的 "%4d " 列宽（5 列）保持一致
 	ln := termd.LNNone
 	lineNumCol := 0
-	if m.sm.Mode() == termd.ModeEdit {
+	if m.sm.LineNumMode() != termd.LNNone {
 		ln = m.sm.LineNumMode()
-		if ln != termd.LNNone {
-			lineNumCol = editLineNumCol
-		}
+		lineNumCol = editLineNumCol
 	}
 	blankPrefix := strings.Repeat(" ", lineNumCol)
 	width := m.contentWidth() - lineNumCol
@@ -40,6 +37,11 @@ func (m *EditorModel) rebuildPreview() {
 	cursorBuf := -1
 	if m.sm.Mode() == termd.ModePreview {
 		cursorBuf = m.previewCursor
+	}
+	// 光标行（用于行号高亮）：编辑模式用 m.cursorRow，预览模式用 cursorBuf(m.previewCursor)
+	cursorRow := m.cursorRow
+	if m.sm.Mode() == termd.ModePreview {
+		cursorRow = cursorBuf
 	}
 
 	lines := m.Buf.Lines
@@ -58,7 +60,7 @@ func (m *EditorModel) rebuildPreview() {
 		}
 
 		// 行号前缀（仅块首行显示 buffer 行号）
-		prefix := renderLineNum(ln, brow, brow)
+		prefix := renderLineNum(ln, brow, cursorRow)
 		if prefix == "" {
 			prefix = blankPrefix
 		}
@@ -78,7 +80,7 @@ func (m *EditorModel) rebuildPreview() {
 			// 光标悬停时只看源码文本可彻底规避硬折行错位；光标离开后（rebuildPreview 重建）立即恢复渲染。
 			if m.sm.Mode() == termd.ModePreview && cursorBuf >= i && cursorBuf <= j {
 				for r := i; r <= j; r++ {
-					rp := renderLineNum(ln, r, r)
+					rp := renderLineNum(ln, r, cursorRow)
 					if rp == "" {
 						rp = blankPrefix
 					}
@@ -143,8 +145,8 @@ func (m *EditorModel) rebuildPreview() {
 			if j+1 < len(lines) {
 				j++ // 含结束 %% 行
 			}
-			for r := i; r <= j; r++ {
-				rp := renderLineNum(ln, r, r)
+for r := i; r <= j; r++ {
+					rp := renderLineNum(ln, r, cursorRow)
 				if rp == "" {
 					rp = blankPrefix
 				}
@@ -175,7 +177,7 @@ func (m *EditorModel) rebuildPreview() {
 			// 不触发 glamour 表格渲染（超宽表格对齐行被终端硬折行是飘逸根源之一）。
 			if m.sm.Mode() == termd.ModePreview && cursorBuf >= i && cursorBuf <= j {
 				for r := i; r <= j; r++ {
-					rp := renderLineNum(ln, r, r)
+					rp := renderLineNum(ln, r, cursorRow)
 					if rp == "" {
 						rp = blankPrefix
 					}
@@ -273,7 +275,7 @@ func (m *EditorModel) rebuildPreview() {
 			}
 			baseOut := len(outLines)
 			for r := start; r <= j; r++ {
-				rp := renderLineNum(ln, r, r)
+				rp := renderLineNum(ln, r, cursorRow)
 				if rp == "" {
 					rp = blankPrefix
 				}
@@ -296,7 +298,7 @@ func (m *EditorModel) rebuildPreview() {
 			_, _, ok := termd.ExtractBlockImage(trimmed)
 			return ok
 		}():
-			// 独立成行的图片 ![alt](url)：用 🖼 占位符显示（图形预览已关闭，见下方说明）。
+			// 独立成行的图片 ![alt](url)：显示占位符 + 路径（不再渲染图片）
 			alt, url, _ := termd.ExtractBlockImage(trimmed)
 			note := "🖼 " + alt + " (" + url + ")"
 			ph := m.Rend.Styles.Img.Render(note)

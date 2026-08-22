@@ -27,6 +27,15 @@ import (
 // htmlAnchorRE 匹配 HTML 锚点行：<a id="foo"> / <a name='foo'>。
 var htmlAnchorRE = regexp.MustCompile(`(?i)<a\s+(?:id|name)\s*=\s*["']([^"']+)["']`)
 
+// urlSchemeRE 匹配带 scheme 的 URL（http://, https://, mailto:, file: 等），用于排除非锚点链接。
+var urlSchemeRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://`)
+
+// isMarkdownFile 判断路径是否为 Markdown 文件（.md, .markdown, .mdown 等）。
+func isMarkdownFile(path string) bool {
+	ext := strings.ToLower(path)
+	return strings.HasSuffix(ext, ".md") || strings.HasSuffix(ext, ".markdown") || strings.HasSuffix(ext, ".mdown")
+}
+
 // githubSlug 按 GitHub 风格把标题文本转成锚点 slug：
 // 小写、丢弃标点（保留 - 与 _）、空白转连字符（连续空白合并为一个）。
 func githubSlug(s string) string {

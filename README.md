@@ -117,6 +117,7 @@ Edit 模式内部再分 **INSERT（插入）** 与 **NORMAL（普通导航）** 
 | `:set rnu` / `:set relativenumber` | 显示相对行号 |
 | `:set nonu` | 关闭行号 |
 | `:set cursorblink` / `:set nocursorblink` | 开启 / 关闭光标闪烁 |
+| `:set cursor block` / `:set cursor bar` / `:set cursor underline` | 设置光标形状：块 / 竖线 / 下划线 |
 | `:set smoothscroll` / `:set nosmoothscroll` | 开启 / 关闭 vim 式行滚动（老终端可关闭） |
 | `:ex` | 打开文件浏览器 |
 | `:d` / `:dd` | 删除当前行 |
@@ -174,6 +175,9 @@ Edit 模式内部再分 **INSERT（插入）** 与 **NORMAL（普通导航）** 
 | `nonu` | `nonumber` / `norelativenumber` | 关闭行号 | **默认** |
 | `cursorblink` | — | 开启硬件光标闪烁 | **开启** |
 | `nocursorblink` | — | 关闭光标闪烁（光标常亮） | 关闭 |
+| `cursor block` | — | 光标形状：块（默认） | — |
+| `cursor bar` | — | 光标形状：竖线 | — |
+| `cursor underline` | — | 光标形状：下划线 | — |
 | `fileicons` | — | 文件浏览器渲染 Nerd Font 图标（仅 Nerd Font 终端有效，普通终端会乱码） | 关闭 |
 | `nofileicons` | — | 关闭文件浏览器图标 | **默认** |
 | `smoothscroll` | — | vim 式行滚动（按视觉行滚动，滚轮/翻页逐屏幕行移动） | **开启** |
@@ -193,6 +197,10 @@ set nonu
 # 光标闪烁
 set cursorblink
 set nocursorblink
+# 光标形状
+set cursor block
+set cursor bar
+set cursor underline
 # 文件浏览器 Nerd Font 图标（仅 Nerd Font 终端有效，普通终端会乱码，默认关闭）
 set fileicons
 set nofileicons

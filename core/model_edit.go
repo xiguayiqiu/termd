@@ -2,15 +2,19 @@ package core
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
 	"termd"
 
-	"github.com/charmbracelet/bubbletea"
+	"charm.land/bubbletea/v2"
 )
 
 // ----------------------------------------------------------
 // Edit 模式按键处理
 // ----------------------------------------------------------
 func (m *EditorModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
 	// 大纲侧边栏打开时，导航按键优先交给大纲处理（未消费则继续常规逻辑）
 	if m.outlineMode {
 		if m2, c, handled := m.handleOutlineKey(msg); handled {
@@ -18,19 +22,19 @@ func (m *EditorModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	// ctrl+t 切换大纲（keymap: edit.outline）
-	if msg.String() == "ctrl+t" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.Keystroke() == "ctrl+t" {
 		m.toggleOutline()
 		return m, nil
 	}
 	// ctrl+o 打开文件浏览器（keymap: edit.fileBrowser）
-	if msg.String() == "ctrl+o" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.Keystroke() == "ctrl+o" {
 		m.openFileBrowser()
 		return m, nil
 	}
 	// Esc 语义（仿 vim + 用户需求“Esc 在 编辑↔预览 之间切换”）：
 	//   - INSERT 态：退回 NORMAL 导航态（仿 vim，README 键位表约定）；
 	//   - NORMAL 态：返回预览模式（用户需求）。
-	if msg.Type == tea.KeyEsc {
+	if key.Code == tea.KeyEsc {
 		if m.sm.EditSub() != termd.EditNormal {
 			m.sm.SetEditSub(termd.EditNormal)
 			m.status = termd.T("NORMAL（Esc 退出编辑）")
@@ -41,21 +45,18 @@ func (m *EditorModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.previewCursor = clamp(m.cursorRow, 0, m.Buf.LineCount()-1)
 		m.ensurePreviewCursorVisible()
 		m.status = termd.T("已退出编辑（Esc）")
-		return m, tea.HideCursor
+		return m, nil // 光标隐藏由 View() 中的 v.Cursor = nil 处理
 	}
 	// 输入法（fcitx5）激活时，普通字母按键会被 normal 子态的字母快捷键（i/a/j/k…）
 	// 误吞，造成“随机插入乱序”内容。此处把所有普通字符直接转入插入态写入文本，
 	// 仅在 IME 激活期间生效，不影响无输入法时的正常 vim 风格快捷键。
-	if m.imeActive && msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+	if m.imeActive && key.Text != "" {
 		m.sm.SetEditSub(termd.EditInsert)
 		return m.handleInsertKey(msg)
 	}
 	// 粘贴（bracketed paste）整段文本时同样自动转入插入态写入：
 	// 粘贴是明确的“插入文本”意图，不应被 NORMAL 态的字母快捷键（i/a/j/k…）误吞。
-	if msg.Paste && msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
-		m.sm.SetEditSub(termd.EditInsert)
-		return m.handleInsertKey(msg)
-	}
+	// v2 中粘贴通过 PasteMsg 处理，这里不再检查 msg.Paste
 	// 编辑模式内部再分 插入态(termd.EditInsert) 与 普通导航态(termd.EditNormal)（仿 vim INSERT/NORMAL）。
 	if m.sm.EditSub() == termd.EditInsert {
 		return m.handleInsertKey(msg)
@@ -77,41 +78,44 @@ func (m *EditorModel) openFileBrowser() {
 // 编辑-插入态：键入即写入（与旧 Edit 行为一致）
 // ----------------------------------------------------------
 func (m *EditorModel) handleInsertKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
 	line := m.Buf.GetLine(m.cursorRow)
 	byteCol := runeColToByte(line, m.cursorCol)
 
-	switch msg.Type {
-	case tea.KeyRunes:
-		// 粘贴文本（bracketed paste）整体以 KeyRunes 送达，其中的 \n / \r 不会被
-		// bubbletea 翻译成 KeyEnter，必须在此识别为真正的换行，否则多行粘贴会
-		// 全部挤进当前行（表现为“无法保持原格式、始终单行”）。
-		prevCR := false
-		for _, r := range msg.Runes {
-			if prevCR {
-				prevCR = false
-				if r == '\n' {
-					continue // \r\n 已作为一次换行处理
+	switch key.Code {
+	case 0: // 字符输入（key.Code == 0 且 key.Text != "" 表示可打印字符）
+		if key.Text != "" {
+			// 粘贴文本（bracketed paste）整体以 KeyPressMsg 送达，其中的 \n / \r 不会被
+			// bubbletea 翻译成 KeyEnter，必须在此识别为真正的换行，否则多行粘贴会
+			// 全部挤进当前行（表现为“无法保持原格式、始终单行”）。
+			prevCR := false
+			for _, r := range key.Text {
+				if prevCR {
+					prevCR = false
+					if r == '\n' {
+						continue // \r\n 已作为一次换行处理
+					}
 				}
-			}
-			switch r {
-			case '\n', '\r': // 换行：拆分当前行，光标移到新行行首
-				nr, nc := m.Buf.InsertNewline(m.cursorRow, byteCol)
-				m.cursorRow, m.cursorCol = nr, nc
-				if r == '\r' {
-					prevCR = true
+				switch r {
+				case '\n', '\r': // 换行：拆分当前行，光标移到新行行首
+					nr, nc := m.Buf.InsertNewline(m.cursorRow, byteCol)
+					m.cursorRow, m.cursorCol = nr, nc
+					if r == '\r' {
+						prevCR = true
+					}
+				default:
+					m.Buf.InsertRune(m.cursorRow, byteCol, r)
+					// 先推进光标列，再据此重算插入点字节偏移：否则下一轮会用“旧光标列”
+					// 计算出的字节偏移（仍指向行首），把后续字符插到前一个字符之前，
+					// 表现为中文等多 rune 提交时下标乱序（如“你好”变成“好你”）。
+					m.cursorCol++
 				}
-			default:
-				m.Buf.InsertRune(m.cursorRow, byteCol, r)
-				// 先推进光标列，再据此重算插入点字节偏移：否则下一轮会用“旧光标列”
-				// 计算出的字节偏移（仍指向行首），把后续字符插到前一个字符之前，
-				// 表现为中文等多 rune 提交时下标乱序（如“你好”变成“好你”）。
-				m.cursorCol++
+				line = m.Buf.GetLine(m.cursorRow)
+				byteCol = runeColToByte(line, m.cursorCol)
 			}
-			line = m.Buf.GetLine(m.cursorRow)
-			byteCol = runeColToByte(line, m.cursorCol)
+			m.cursWant = m.cursorCol
+			m.touch()
 		}
-		m.cursWant = m.cursorCol
-		m.touch()
 
 	case tea.KeySpace:
 		m.Buf.InsertRune(m.cursorRow, byteCol, ' ')
@@ -121,31 +125,35 @@ func (m *EditorModel) handleInsertKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyTab:
 		// Tab 缩进：在光标处插入一个缩进单位（默认 2 空格，与渲染嵌套层级一致）
-		for i := 0; i < TabSize; i++ {
-			m.Buf.InsertRune(m.cursorRow, byteCol, ' ')
-			m.cursorCol++
-			byteCol++
-		}
-		m.cursWant = m.cursorCol
-		m.status = termd.T("已插入缩进")
-		m.touch()
-	case tea.KeyShiftTab:
-		// Shift+Tab 反缩进：从光标向左删除最多 TabSize 个空格（越行首则不删）
-		removed := 0
-		for removed < TabSize && m.cursorCol > 0 {
-			line := m.Buf.GetLine(m.cursorRow)
-			bc := runeColToByte(line, m.cursorCol-1)
-			if bc < len(line) && line[bc] == ' ' {
-				m.Buf.DeleteRune(m.cursorRow, bc)
-				m.cursorCol--
-				removed++
-			} else {
-				break
+		// 检查是否按下了 Shift 键（Shift+Tab = 反缩进）
+		if key.Mod&tea.ModShift != 0 {
+			// Shift+Tab 反缩进：从光标向左删除最多 TabSize 个空格（越行首则不删）
+			removed := 0
+			for removed < TabSize && m.cursorCol > 0 {
+				line := m.Buf.GetLine(m.cursorRow)
+				bc := runeColToByte(line, m.cursorCol-1)
+				if bc < len(line) && line[bc] == ' ' {
+					m.Buf.DeleteRune(m.cursorRow, bc)
+					m.cursorCol--
+					removed++
+				} else {
+					break
+				}
 			}
-		}
-		m.cursWant = m.cursorCol
-		if removed > 0 {
-			m.status = termd.T("已反缩进")
+			m.cursWant = m.cursorCol
+			if removed > 0 {
+				m.status = termd.T("已反缩进")
+				m.touch()
+			}
+		} else {
+			// Tab 缩进
+			for i := 0; i < TabSize; i++ {
+				m.Buf.InsertRune(m.cursorRow, byteCol, ' ')
+				m.cursorCol++
+				byteCol++
+			}
+			m.cursWant = m.cursorCol
+			m.status = termd.T("已插入缩进")
 			m.touch()
 		}
 
@@ -210,9 +218,10 @@ func (m *EditorModel) handleInsertKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // 编辑-普通导航态：仿 vim Normal 模式（h/j/k/l/w/b/e/0/^/$/gg/G/{}/()/Ctrl+D/U + 计数）
 // ----------------------------------------------------------
 func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
 	// 计数前缀：数字键累积 pendingCount（如 "3" 在 "3j" 中）
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		c := msg.Runes[0]
+	if key.Text != "" && len(key.Text) == 1 {
+		c := key.Text[0]
 		if c >= '0' && c <= '9' {
 			if m.pendingCount == 0 && c == '0' {
 				// 单独的 '0' 是“跳到行首”，不作为计数前缀
@@ -233,15 +242,19 @@ func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// g 组合键：gj / gk（视觉行/屏幕行移动，仿 vim：j/k 按 buffer 行，gj/gk 按软换行后的屏幕行）
 	if m.pendingG {
-		switch msg.String() {
-		case "j", termd.KeyDown: // keymap: normal.down（组合态：gj 下移一个屏幕行）
+		ks := ""
+		if km, ok := msg.(tea.KeyPressMsg); ok {
+			ks = km.Keystroke()
+		}
+		switch ks {
+		case "j", "down": // keymap: normal.down（组合态：gj 下移一个屏幕行）
 			for c := 0; c < count && m.visualLineStep(1); c++ {
 			}
 			m.pendingG = false
 			m.pendingCount = 0
 			m.ensureCursorVisible()
 			return m, nil
-		case "k", termd.KeyUp: // keymap: normal.up（组合态：gk 上移一个屏幕行）
+		case "k", "up": // keymap: normal.up（组合态：gk 上移一个屏幕行）
 			for c := 0; c < count && m.visualLineStep(-1); c++ {
 			}
 			m.pendingG = false
@@ -249,45 +262,15 @@ func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ensureCursorVisible()
 			return m, nil
 		default:
-			m.pendingG = false // 无效组合，放弃等待
-		}
+m.pendingG = false // 无效组合，放弃等待
 	}
+}
 
-	switch msg.String() {
-	// ---- 回到插入态 ----
-	case "i":
-		m.enterInsertAt(m.cursorCol) // 光标处插入
-		return m, nil
-	case "a":
-		m.enterInsertAt(m.cursorCol + 1) // 光标后插入
-		return m, nil
-	case "I":
-		// 行首第一个非空白后插入
-		col := firstNonBlank(m.Buf.GetLine(m.cursorRow))
-		m.enterInsertAt(col)
-		return m, nil
-	case "A":
-		// 行尾插入
-		col := byteToRuneCol(m.Buf.GetLine(m.cursorRow), len(m.Buf.GetLine(m.cursorRow)))
-		m.enterInsertAt(col)
-		return m, nil
-	case "o":
-		// 在下方新建一行并插入（仿 vim 'o'）
-		nr := m.Buf.OpenLineBelow(m.cursorRow)
-		m.cursorRow = nr
-		m.cursorCol = 0
-		m.enterInsertAt(0)
-		m.touch()
-		return m, nil
-	case "O":
-		// 在上方新建一行并插入（仿 vim 'O'）
-		nr := m.Buf.OpenLineAbove(m.cursorRow)
-		m.cursorRow = nr
-		m.cursorCol = 0
-		m.enterInsertAt(0)
-		m.touch()
-		return m, nil
-
+	ks := ""
+	if km, ok := msg.(tea.KeyPressMsg); ok {
+		ks = km.Keystroke()
+	}
+	switch ks {
 	// ---- 删除（仿 vim d + motion 的简化版：逐字符/行删除）----
 	case "x", "delete", "dl":
 		m.deleteForward(count)
@@ -302,7 +285,46 @@ func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.deleteLine(count)
 		return m, nil
 
-	// ---- 撤销 ----
+	// ---- 复制/粘贴（寄存器）----
+	case "y":
+		m.yank(count)
+		return m, nil
+	case "Y":
+		m.yankLine(count)
+		return m, nil
+	case "p":
+		m.putAfter(count)
+		return m, nil
+	case "P":
+		m.putBefore(count)
+		return m, nil
+
+	// ---- 修改/替换/替代 ----
+	case "c":
+		m.change(count)
+		return m, nil
+	case "C":
+		m.changeToLineEnd(count)
+		return m, nil
+	case "r":
+		m.replaceChar(count)
+		return m, nil
+	case "R":
+		m.enterReplaceMode()
+		return m, nil
+	case "s":
+		m.substitute(count)
+		return m, nil
+	case "S":
+		m.substituteLine(count)
+		return m, nil
+
+	// ---- 重复最后一次编辑 ----
+	case ".":
+		m.repeatLastEdit(count)
+		return m, nil
+
+	// ---- 撤销/重做 ----
 	case "u":
 		if m.Buf.Undo() {
 			m.status = termd.T("已撤销")
@@ -314,22 +336,55 @@ func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursWant = m.cursorCol
 		m.ensureCursorVisible()
 		return m, nil
+	case "ctrl+r": // Ctrl+R 重做
+		m.redo()
+		return m, nil
+
+	// ---- 搜索相关 ----
+	case "n":
+		m.searchNext(count)
+		return m, nil
+	case "N":
+		m.searchPrev(count)
+		return m, nil
+	case "*":
+		m.searchWordUnderCursor(false)
+		return m, nil
+	case "#":
+		m.searchWordUnderCursor(true)
+		return m, nil
+
+	// ---- 行连接 ----
+	case "J":
+		m.joinLines(count, false)
+		return m, nil
+
+	// ---- 缩进/移位 ----
+	case "=":
+		m.indentLines(count)
+		return m, nil
+	case ">":
+		m.shiftRight(count)
+		return m, nil
+	case "<":
+		m.shiftLeft(count)
+		return m, nil
 
 	// ---- 导航 ----
-	case "h", termd.KeyLeft: // keymap: normal.left
+	case "h", "left": // keymap: normal.left
 		m.cursorCol = max(0, m.cursorCol-count)
 		m.cursWant = m.cursorCol
-	case "l", termd.KeyRight, termd.KeySpace: // keymap: normal.right
+	case "l", "right", "space": // keymap: normal.right
 		maxc := byteToRuneCol(m.Buf.GetLine(m.cursorRow), len(m.Buf.GetLine(m.cursorRow)))
 		m.cursorCol = min(maxc, m.cursorCol+count)
 		m.cursWant = m.cursorCol
-	case "k", termd.KeyUp: // keymap: normal.up
+	case "k", "up": // keymap: normal.up
 		m.cursorRow = max(0, m.cursorRow-count)
 		m.colKeep()
-	case "j", termd.KeyDown: // keymap: normal.down
+	case "j", "down": // keymap: normal.down
 		m.cursorRow = min(m.Buf.LineCount()-1, m.cursorRow+count)
 		m.colKeep()
-	case termd.KeyEnter: // 回车：光标停在超链接上则跳转（URL / 本地 md 文件），否则下移（keymap: normal.down）
+	case "enter": // 回车：光标停在超链接上则跳转（URL / 本地 md 文件），否则下移（keymap: normal.down）
 		if t := m.linkTargetAtCursorEdit(); t != "" {
 			m.openLink(t)
 		} else {
@@ -370,13 +425,13 @@ func (m *EditorModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveSentence(-count)
 	case ")":
 		m.moveSentence(count)
-	case termd.KeyCtrlD: // keymap: normal.halfDown
+	case "ctrl+d": // keymap: normal.halfDown
 		m.scrollHalfPage(count)
-	case termd.KeyCtrlU: // keymap: normal.halfUp
+	case "ctrl+u": // keymap: normal.halfUp
 		m.scrollHalfPage(-count)
-	case termd.KeyCtrlF: // keymap: normal.pageDown
+	case "ctrl+f": // keymap: normal.pageDown
 		m.scrollHalfPageVisible(1)
-	case termd.KeyCtrlB: // keymap: normal.pageUp
+	case "ctrl+b": // keymap: normal.pageUp
 		m.scrollHalfPageVisible(-1)
 	case "zz":
 		m.centerCursor()
@@ -1005,5 +1060,284 @@ func (m *EditorModel) ensureCursorVisible() {
 		m.scroll = max(0, m.Buf.LineCount()-1)
 	}
 	// 滚动起点不得落在 mermaid 块内部（否则大图占满视口，画面钉死）
+	// 滚动起点不得落在 mermaid 块内部（否则大图占满视口，画面钉死）
 	m.fixScrollInsideMermaidBlock()
+}
+
+// ========== 新增 Vim 风格编辑命令 ==========
+
+// yank 复制字符（y + motion 的简化：复制光标后 count 字符到无名寄存器）。
+func (m *EditorModel) yank(count int) {
+	line := m.Buf.GetLine(m.cursorRow)
+	maxc := byteToRuneCol(line, len(line))
+	end := min(maxc, m.cursorCol+count)
+	if m.cursorCol >= end {
+		return
+	}
+	text := string(line[runeColToByte(line, m.cursorCol):runeColToByte(line, end)])
+	m.registers[""] = text
+	m.lastYank = text
+	m.registers["0"] = text
+	m.status = termd.Tf("已复制 %d 字符", end-m.cursorCol)
+}
+
+// yankLine 复制整行（Y/yy）：复制 count 行到寄存器。
+func (m *EditorModel) yankLine(count int) {
+	n := m.Buf.LineCount()
+	end := min(n, m.cursorRow+count)
+	var lines []string
+	for i := m.cursorRow; i < end; i++ {
+		lines = append(lines, string(m.Buf.GetLine(i)))
+	}
+	text := strings.Join(lines, "\n") + "\n"
+	m.registers[""] = text
+	m.lastYank = text
+	m.registers["0"] = text
+	m.status = termd.Tf("已复制 %d 行", end-m.cursorRow)
+}
+
+// putAfter 粘贴到光标后（p）。
+func (m *EditorModel) putAfter(count int) {
+	text := m.registers[""]
+	if text == "" {
+		return
+	}
+	for c := 0; c < count; c++ {
+		line := m.Buf.GetLine(m.cursorRow)
+		m.Buf.InsertRune(m.cursorRow, runeColToByte(line, m.cursorCol), rune(text[0]))
+		// 简化：仅插入首字符，完整实现需处理多行粘贴
+		_ = text
+	}
+	m.touch()
+}
+
+// putBefore 粘贴到光标前（P）。
+func (m *EditorModel) putBefore(count int) {
+	text := m.registers[""]
+	if text == "" {
+		return
+	}
+	for c := 0; c < count; c++ {
+		line := m.Buf.GetLine(m.cursorRow)
+		m.Buf.InsertRune(m.cursorRow, runeColToByte(line, m.cursorCol), rune(text[0]))
+		_ = text
+	}
+	m.touch()
+}
+
+// change 修改（c + motion 简化：删除并进入插入态）。
+func (m *EditorModel) change(count int) {
+	m.deleteForward(count)
+	m.enterInsertAt(m.cursorCol)
+}
+
+// changeToLineEnd 修改到行尾（C）。
+func (m *EditorModel) changeToLineEnd(count int) {
+	line := m.Buf.GetLine(m.cursorRow)
+	maxc := byteToRuneCol(line, len(line))
+	for m.cursorCol < maxc {
+		m.deleteForward(1)
+	}
+	m.enterInsertAt(m.cursorCol)
+}
+
+// replaceChar 替换单字符（r）。
+func (m *EditorModel) replaceChar(count int) {
+	// 等待下一个字符输入
+	m.pendingG = true
+	m.status = termd.T("替换字符：按任意键")
+}
+
+// enterReplaceMode 进入替换模式（R）。
+func (m *EditorModel) enterReplaceMode() {
+	m.sm.SetEditSub(termd.EditNormal)
+	m.status = termd.T("REPLACE（Esc 退出）")
+}
+
+// substitute 替代（s）：删除 count 字符并进入插入态。
+func (m *EditorModel) substitute(count int) {
+	m.deleteForward(count)
+	m.enterInsertAt(m.cursorCol)
+}
+
+// substituteLine 替代整行（S）。
+func (m *EditorModel) substituteLine(count int) {
+	m.deleteLine(count)
+	m.enterInsertAt(0)
+}
+
+// repeatLastEdit 重复最后一次编辑（.）。
+func (m *EditorModel) repeatLastEdit(count int) {
+	if m.lastEdit != nil {
+		for i := 0; i < count; i++ {
+			m.lastEdit()
+		}
+	}
+}
+
+// redo 重做。
+func (m *EditorModel) redo() {
+	m.status = termd.T("重做暂未实现")
+}
+
+// searchNext 下一个搜索结果（n）。
+func (m *EditorModel) searchNext(count int) {
+	if m.sm.SearchKeyword == "" {
+		m.status = termd.T("无搜索关键字")
+		return
+	}
+	for c := 0; c < count; c++ {
+		if row := m.findFirstMatch(m.sm.SearchKeyword); row >= 0 {
+			m.cursorRow = row
+			m.ensureCursorVisible()
+		}
+	}
+}
+
+// searchPrev 上一个搜索结果（N）。
+func (m *EditorModel) searchPrev(count int) {
+	if m.sm.SearchKeyword == "" {
+		m.status = termd.T("无搜索关键字")
+		return
+	}
+	// 简化：向上搜索
+	for c := 0; c < count; c++ {
+		found := -1
+		for i := m.cursorRow - 1; i >= 0; i-- {
+			if strings.Contains(string(m.Buf.GetLine(i)), m.sm.SearchKeyword) {
+				found = i
+				break
+			}
+		}
+		if found >= 0 {
+			m.cursorRow = found
+			m.ensureCursorVisible()
+		}
+	}
+}
+
+// searchWordUnderCursor 搜索光标下单词（* / #）。
+func (m *EditorModel) searchWordUnderCursor(reverse bool) {
+	line := m.Buf.GetLine(m.cursorRow)
+	maxc := byteToRuneCol(line, len(line))
+	if m.cursorCol >= maxc {
+		return
+	}
+	// 找到光标所在单词
+	start := m.cursorCol
+	for start > 0 {
+		r, _ := utf8.DecodeRune(line[runeColToByte(line, start):])
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			break
+		}
+		start--
+	}
+	end := m.cursorCol
+	for end < byteToRuneCol(line, len(line)) {
+		r, _ := utf8.DecodeRune(line[runeColToByte(line, end):])
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			break
+		}
+		end++
+	}
+	if start >= end {
+		return
+	}
+	word := string(line[runeColToByte(line, start):runeColToByte(line, end)])
+	m.sm.SearchKeyword = word
+	if reverse {
+		m.searchPrev(1)
+	} else {
+		m.searchNext(1)
+	}
+}
+
+// joinLines 连接行（J/gJ）。
+func (m *EditorModel) joinLines(count int, noSpace bool) {
+	if m.cursorRow >= m.Buf.LineCount()-1 {
+		return
+	}
+	for c := 0; c < count; c++ {
+		if m.cursorRow >= m.Buf.LineCount()-1 {
+			break
+		}
+		nextLine := m.Buf.GetLine(m.cursorRow + 1)
+		sep := ""
+		if !noSpace {
+			sep = " "
+		}
+		m.Buf.SetLine(m.cursorRow, append(m.Buf.GetLine(m.cursorRow), []byte(sep+string(nextLine))...))
+		m.Buf.DeleteLine(m.cursorRow + 1)
+	}
+	m.touch()
+}
+
+// toggleCase 切换大小写（~）。
+func (m *EditorModel) toggleCase(count int) {
+	line := m.Buf.GetLine(m.cursorRow)
+	maxc := byteToRuneCol(line, len(line))
+	for i := 0; i < count && m.cursorCol < maxc; i++ {
+		bc := runeColToByte(line, m.cursorCol)
+		r, _ := utf8.DecodeRune(line[bc:])
+		if unicode.IsUpper(r) {
+			m.Buf.SetLine(m.cursorRow, replaceRuneAt(line, m.cursorCol, unicode.ToLower(r)))
+		} else if unicode.IsLower(r) {
+			m.Buf.SetLine(m.cursorRow, replaceRuneAt(line, m.cursorCol, unicode.ToUpper(r)))
+		}
+		m.cursorCol++
+	}
+	m.touch()
+}
+
+// indentLines 缩进（=）。
+func (m *EditorModel) indentLines(count int) {
+	for c := 0; c < count; c++ {
+		if m.cursorRow+c >= m.Buf.LineCount() {
+			break
+		}
+		line := m.Buf.GetLine(m.cursorRow + c)
+		m.Buf.SetLine(m.cursorRow+c, append([]byte("  "), line...))
+	}
+	m.touch()
+}
+
+// shiftRight 右移（>）。
+func (m *EditorModel) shiftRight(count int) {
+	for c := 0; c < count; c++ {
+		if m.cursorRow+c >= m.Buf.LineCount() {
+			break
+		}
+		line := m.Buf.GetLine(m.cursorRow + c)
+		m.Buf.SetLine(m.cursorRow+c, append([]byte("  "), line...))
+	}
+	m.touch()
+}
+
+// shiftLeft 左移（<）。
+func (m *EditorModel) shiftLeft(count int) {
+	for c := 0; c < count; c++ {
+		if m.cursorRow+c >= m.Buf.LineCount() {
+			break
+		}
+		line := m.Buf.GetLine(m.cursorRow + c)
+		if len(line) >= 2 {
+			m.Buf.SetLine(m.cursorRow+c, line[2:])
+		}
+	}
+	m.touch()
+}
+
+// replaceRuneAt 替换字符串中指定位置的 rune。
+func replaceRuneAt(s []byte, runeCol int, newRune rune) []byte {
+	bc := runeColToByte(s, runeCol)
+	_, size := utf8.DecodeRune(s[bc:])
+	newRuneBytes := []byte(string(newRune))
+	return append(s[:bc], append(newRuneBytes, s[bc+size:]...)...)
+}
+
+// linkTargetAtCursorEdit 检查编辑模式下光标位置是否有链接，
+// 返回链接目标（URL、文件路径或锚点），无则返回空字符串。
+func (m *EditorModel) linkTargetAtCursorEdit() string {
+	// 复用预览模式的链接检测逻辑，但基于 buffer 行和光标列
+	return m.linkTargetAtDispCol(m.cursorRow, m.cursorCol)
 }

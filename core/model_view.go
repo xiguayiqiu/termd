@@ -3,6 +3,10 @@ package core
 import (
 	"fmt"
 	"strings"
+
+	"charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 	"termd"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,16 +15,17 @@ import (
 // ----------------------------------------------------------
 // View 渲染
 // ----------------------------------------------------------
-func (m *EditorModel) View() string {
+func (m *EditorModel) View() tea.View {
+	var v tea.View
+	v.AltScreen = true
+	v.ReportFocus = true // 启用焦点报告，支持 fcitx5 等输入法
+	v.MouseMode = tea.MouseModeCellMotion // 启用鼠标单元格移动模式
+
 	if m.fb != nil && m.fb.Opened {
-		// 文件浏览器：两栏主体 + 底部状态栏（位置/输入提示写入状态栏，避免行数叠加错乱）。
-		// 强隔离：传 height-3 让 Render 内部产出 height-4 行主体（它自行预留状态栏 1 行），
-		// 再由本分支拼接 顶线+分隔线+状态栏+底线，与其他视图保持一致的“上下分明”边框布局；
-		// 完全不依赖 contentHeight()（后者会随 Preview/Command 模式变化，曾导致两栏布局被预览状态干扰）。
+		// 文件浏览器：两栏主体 + 底部状态栏
 		body := m.fb.Render(m.width, m.height-3)
 		switch m.fb.Mode {
 		case termd.FBInput:
-			// 输入名称：在状态栏显示 label + 带反显光标块的输入缓冲
 			r := []rune(m.fb.InputBuf)
 			if m.fb.InputPos > len(r) {
 				m.fb.InputPos = len(r)
@@ -34,32 +39,29 @@ func (m *EditorModel) View() string {
 		default:
 			m.status = termd.T("位置: ") + m.fb.Dir
 		}
-		// 强制输出完整 height 行以全量覆盖（杜绝底部残留上一帧内容导致「两栏混合」）。
-		// 顶线 + 主体 + 分隔线 + 状态栏 + 底线，与主界面“上下分明”的边框布局保持一致。
-		// 末尾追加滚动区恢复保险：即使滚动帧的 DECSTBM 因异常未恢复，下一次渲染也强制恢复。
-		return m.frameLine("+", "+") + "\n" + body + "\n" +
+		content := m.frameLine("+", "+") + "\n" + body + "\n" +
 			m.frameLine("+", "+") + "\n" + m.statusBar() + "\n" +
-			m.frameLine("+", "+") + "\x1b[r"
+			m.frameLine("+", "+")
+		v.SetContent(content)
+		return v
 	}
 
 	if m.helpMode {
-		// 键位帮助视图：渲染集中注册的键位表（keymap.go），状态栏贴底
-		return m.fixBottom(termd.RenderKeyMapHelp(), "") + "\x1b[r"
+		v.SetContent(m.fixBottom(termd.RenderKeyMapHelp(), ""))
+		return v
 	}
 
 	if m.cmdHelpMode {
-		// 命令模式命令帮助视图：渲染所有命令及用法（keymap.go），状态栏贴底
-		return m.fixBottom(termd.RenderCommandHelp(), "") + "\x1b[r"
+		v.SetContent(m.fixBottom(termd.RenderCommandHelp(), ""))
+		return v
 	}
 
 	if m.markdownLangMode {
-		// Markdown 语法教程视图：渲染 termd.RenderMarkdownLanguage()（MarkdownLanguage.go），
-		// 支持 j/k 与滚轮翻页（mlScroll 偏移）。
-		return m.renderMarkdownLang() + "\x1b[r"
+		v.SetContent(m.renderMarkdownLang())
+		return v
 	}
 
 	// 渲染可能因异常输入/终端环境而 panic；此处兜底，避免整个程序崩溃
-	// （bubbletea 的 recover 会把 panic 直接暴露给用户并结束程序）。
 	var rendered string
 	func() {
 		defer func() {
@@ -80,37 +82,67 @@ func (m *EditorModel) View() string {
 			s, _ := m.renderPreview()
 			body.WriteString(s)
 		}
-		// 命令模式下，命令行内容（底部第二行）；否则为空
 		cmdLine := ""
 		if m.sm.Mode() == termd.ModeCommand {
 			cmdLine = m.renderCmdLine()
 		}
 		bodyStr := body.String()
-		// 大纲侧边栏打开时，把大纲列与正文逐行并排（总宽 = 终端宽，状态栏仍贴底）
 		if m.outlineMode && m.outlineWidth() > 0 {
 			bodyStr = m.composeOutlineWithBody(bodyStr)
 		}
 		rendered = m.fixBottom(bodyStr, cmdLine)
-		// 光标定位策略：
-		//  - 编辑/预览模式：光标位置已由 renderEdit/renderPreview 注入的蓝底块指示，
-		//    隐藏硬件光标避免双光标重叠。
-		//  - 命令模式：硬件光标定位到命令行输入框（前缀后紧跟输入位置，仿 vim），
-		//    不再定位到预览当前行——命令模式不移动当前行，定位过去只会造成光标错位。
 	}()
 
-	// 末尾追加滚动区恢复保险：任何情况下都恢复全屏滚动区，防止滚动帧异常残留
-	// DECSTBM 导致后续渲染持续触发终端滚动（界面逐步上移/消失）。
-	// 注意：DECSTBM（\x1b[r）在多数终端会把光标移动到 home position（左上角），
-	// 因此必须先恢复滚动区、再输出光标控制序列；否则命令模式的光标定位会被
-	// \x1b[r 覆盖——光标跳到左上角被顶线遮挡，表现为「命令模式下不显示光标」。
-	restoreScroll := "\x1b[r"
+	v.SetContent(rendered)
+
+	// 光标形状映射
+	cursorShape := tea.CursorShape(m.cursorShape)
+	if cursorShape < tea.CursorBlock || cursorShape > tea.CursorBar {
+		cursorShape = tea.CursorBlock
+	}
+
+	// 根据模式设置硬件光标，类似 Vim 的 guicursor 行为：
+	// - Command 模式：硬件光标定位到命令行输入框
+	// - Edit/Preview 模式：也显示硬件光标（由用户配置形状），蓝底块作为辅助指示
+	cursorStyle := encodeCursorStyle(cursorShape, m.blinkMode)
+
+	// 设置光标位置
 	switch m.sm.Mode() {
 	case termd.ModeCommand:
-		rendered += restoreScroll + m.cmdlineCursorGoto()
+		row := m.height - 1
+		if row < 1 {
+			row = 1
+		}
+		col := 2 // 前缀 ":" + 空正文时的光标块位置
+		input := m.sm.CmdInput
+		if r := []rune(input); len(r) > 1 {
+			col = 1 + runewidth.StringWidth(string(r[1:])) + 1
+		}
+		v.Cursor = tea.NewCursor(col-1, row-1)
+		v.Cursor.Shape = cursorShape
+		v.Cursor.Blink = m.blinkMode
+	case termd.ModeEdit:
+		// Edit 模式：显示硬件光标（配置的形状），位置由计算得出
+		if cursor := m.computeEditCursorPos(); cursor != nil {
+			cursor.Shape = cursorShape
+			cursor.Blink = m.blinkMode
+			v.Cursor = cursor
+		}
 	default:
-		rendered += restoreScroll + hideCursor()
+		// Preview 模式：隐藏硬件光标（由蓝底块指示）
+		v.Cursor = nil
 	}
-	return rendered
+
+	// 确保光标形状转义序列被发送（即使 bubbletea 的 renderer 不重复发送）
+	// 通过在 View 内容中注入 ANSI 序列实现
+	if m.lastCursorStyle != cursorStyle {
+		m.lastCursorStyle = cursorStyle
+		// 注入到内容开头，确保每次渲染都发送
+		rendered = ansi.SetCursorStyle(cursorStyle) + rendered
+		v.SetContent(rendered)
+	}
+
+	return v
 }
 
 // fallbackView 在渲染 panic 兜底时返回一个尽量简单、不可能再 panic 的视图，
@@ -265,7 +297,7 @@ func (m *EditorModel) renderEdit() string {
 					brow := k
 					var s string
 					if brow == m.cursorRow {
-						s = m.Rend.RenderEditLineWithCursor(m.Buf.GetLine(brow), m.cursorCol)
+						s = m.Rend.RenderEditLineWithCursor(m.Buf.GetLine(brow), m.cursorCol, false)
 					} else {
 						s = string(m.Buf.GetLine(brow))
 					}
@@ -358,7 +390,7 @@ func (m *EditorModel) renderEdit() string {
 					brow := k
 					var s string
 					if brow == m.cursorRow {
-						s = m.Rend.RenderEditLineWithCursor(m.Buf.GetLine(brow), m.cursorCol)
+						s = m.Rend.RenderEditLineWithCursor(m.Buf.GetLine(brow), m.cursorCol, false)
 					} else {
 						s = string(m.Buf.GetLine(brow))
 					}
@@ -428,7 +460,7 @@ func (m *EditorModel) renderEdit() string {
 					brow := k
 					var s string
 					if brow == m.cursorRow {
-						s = m.Rend.RenderEditLineWithCursor(m.Buf.GetLine(brow), m.cursorCol)
+						s = m.Rend.RenderEditLineWithCursor(m.Buf.GetLine(brow), m.cursorCol, false)
 					} else {
 						s = string(m.Buf.GetLine(brow))
 					}
@@ -466,11 +498,11 @@ func (m *EditorModel) renderEdit() string {
 			// 不隐藏标记），保证输入所见即所得；光标离开后由 RenderLine→RenderInline
 			// 渲染为灰色注释。
 			if termd.IsWholeLineComment(string(line)) {
-				rendered = m.Rend.RenderEditLineWithCursor(line, m.cursorCol)
+				rendered = m.Rend.RenderEditLineWithCursor(line, m.cursorCol, false)
 			} else {
 				// 光标行：富文本 + 行内标记着色 + 反显光标块（保持行宽、光标列严格对齐），
 				// 使进入编辑模式后 markdown 语法立即“渲染”出来，不再呈现纯原文。
-				rendered = m.Rend.RenderEditLineWithCursorStyled(line, m.cursorCol)
+				rendered = m.Rend.RenderEditLineWithCursorStyled(line, m.cursorCol, false)
 			}
 			rendered = cursorLineStyle.Render(rendered)
 		} else {
@@ -514,4 +546,106 @@ func (m *EditorModel) renderEdit() string {
 		vLines++
 	}
 	return b.String()
+}
+
+// encodeCursorStyle 将光标形状和闪烁状态编码为 DECSCUSR 参数值。
+// 与 bubbletea v2 的 encodeCursorStyle 保持一致：
+//   - CursorBlock (0): blink=1, steady=2
+//   - CursorUnderline (1): blink=3, steady=4
+//   - CursorBar (2): blink=5, steady=6
+func encodeCursorStyle(shape tea.CursorShape, blink bool) int {
+	style := int(shape)*2 + 1
+	if !blink {
+		style++
+	}
+	return style
+}
+
+// computeEditCursorPos 计算 Edit 模式下光标在屏幕上的位置（0-based）。
+// 返回 *tea.Cursor，包含位置、形状、颜色和闪烁设置。
+// 供 fcitx5 等输入法跟随光标位置显示候选窗口。
+func (m *EditorModel) computeEditCursorPos() *tea.Cursor {
+	if m.cursorRow < 0 || m.cursorRow >= m.Buf.LineCount() {
+		return nil
+	}
+
+	ch := m.contentHeight()
+	availWidth := m.contentWidth()
+	gutterWidth := 0
+	if m.sm.LineNumMode() != termd.LNNone {
+		availWidth -= 5
+		gutterWidth = 5
+	}
+	if availWidth < 10 {
+		availWidth = 10
+	}
+
+	// 计算光标行之前的视觉行数
+	vLines := 0
+	lines := m.Buf.LineCount()
+	for i := m.scroll; i < m.cursorRow && i < lines; i++ {
+		line := m.Buf.GetLine(i)
+		// 使用与 renderEdit 相同的渲染逻辑
+		var rendered string
+		if termd.IsFenceStart(strings.TrimSpace(string(line))) {
+			// 代码块：原始文本，每行 1 视觉行
+			vLines++
+		} else if i+1 < lines && termd.IsTableStart(string(line), string(m.Buf.GetLine(i+1))) {
+			// 表格：跳过整个表格块
+			j := i + 2
+			for j < lines {
+				r2 := strings.TrimSpace(string(m.Buf.GetLine(j)))
+				if r2 != "" && strings.Contains(r2, "|") {
+					j++
+				} else {
+					break
+				}
+			}
+			// 表格按渲染行数计算，简化为 buffer 行数
+			vLines += (j - i)
+			i = j - 1
+		} else if termd.IsCommentStart(strings.TrimSpace(string(line))) {
+			// 注释块：每行 1 视觉行
+			vLines++
+		} else {
+			rendered = m.Rend.RenderLine(line, true, m.sm.SearchKeyword)
+			wrapped := termd.WrapText(rendered, availWidth)
+			vLines += len(wrapped)
+		}
+		if vLines >= ch {
+			break
+		}
+	}
+
+	if vLines >= ch {
+		return nil // 光标行不在可见区域内
+	}
+
+	// 计算光标行内的光标列位置（显示列）
+	line := m.Buf.GetLine(m.cursorRow)
+	// 找到光标在 buffer 中的字节位置
+	byteCol := runeColToByte(line, m.cursorCol)
+	
+	// 计算光标前所有字符的显示宽度（光标位于字符之前）
+	cursorPrefix := string(line[:byteCol])
+	// 渲染光标前的部分来计算显示宽度
+	prefixRendered := m.Rend.RenderEditLineWithCursorStyled([]byte(cursorPrefix), len([]rune(cursorPrefix)), false)
+	prefixPlain := stripANSIForWidth(prefixRendered)
+	dispCol := runewidth.StringWidth(prefixPlain)
+	
+	col := gutterWidth + dispCol
+
+	// 布局结构（1-based 行号）：
+	// 1: 顶边框
+	// 2: 第1个内容行
+	// ...
+	// ch+1: 最后1个内容行
+	// 转为 0-based：顶边框 Y=0，第一内容行 Y=1
+	row := 1 + vLines // 0-based: 顶边框占 Y=0，内容从 Y=1 开始
+
+	return &tea.Cursor{
+		Position: tea.Position{X: col, Y: row}, // col 已是 0-based (左边框 X=0，内容从 X=1)
+		Shape:    tea.CursorBlock,
+		Blink:    m.blinkMode,
+	}
 }

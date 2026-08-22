@@ -1,7 +1,7 @@
 package core
 
 import (
-	"github.com/charmbracelet/bubbletea"
+	"charm.land/bubbletea/v2"
 	"termd"
 )
 
@@ -10,10 +10,11 @@ import (
 // ----------------------------------------------------------
 func (m *EditorModel) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	fb := m.fb
+	key := msg.Key()
 	switch fb.Mode {
 	case termd.FBInput:
 		// 输入名称子模式：捕获字符、退格、光标移动、回车提交、Esc 取消
-		switch msg.Type {
+		switch key.Code {
 		case tea.KeyEsc:
 			fb.Cancel()
 			m.status = termd.T("已取消")
@@ -31,16 +32,23 @@ func (m *EditorModel) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			fb.InputJump(false)
 		case tea.KeyEnd:
 			fb.InputJump(true)
-		case tea.KeyRunes:
-			fb.AppendInput(msg.Runes)
+		default:
+			// 字符输入
+			if key.Text != "" {
+				fb.AppendInput([]rune(key.Text))
+			}
 		}
 		return m, nil
 	case termd.FBConfirm:
 		// 确认删除子模式：y/Y/enter 确认，n/N/esc 取消
-		switch msg.Type {
-		case tea.KeyRunes:
-			if len(msg.Runes) == 1 {
-				switch msg.Runes[0] {
+		switch key.Code {
+		case tea.KeyEnter:
+			m.status = fb.ConfirmDelete(true)
+		case tea.KeyEsc:
+			m.status = fb.ConfirmDelete(false)
+		default:
+			if key.Text != "" && len(key.Text) == 1 {
+				switch key.Text[0] {
 				case 'y', 'Y':
 					m.status = fb.ConfirmDelete(true)
 					return m, nil
@@ -49,15 +57,15 @@ func (m *EditorModel) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 					return m, nil
 				}
 			}
-		case tea.KeyEnter:
-			m.status = fb.ConfirmDelete(true)
-		case tea.KeyEsc:
-			m.status = fb.ConfirmDelete(false)
 		}
 		return m, nil
 	default: // fbList 列表浏览模式
-		switch msg.String() {
-		case termd.KeyEsc: // keymap: fb.cancel
+		ks := ""
+		if km, ok := msg.(tea.KeyPressMsg); ok {
+			ks = km.Keystroke()
+		}
+		switch ks {
+		case "esc": // keymap: fb.cancel
 			fb.Close()
 			m.status = termd.T("已退出文件浏览器")
 		case "ctrl+o": // 再次按下关闭文件浏览器（与 Esc 等价，形成开关）
@@ -66,31 +74,31 @@ func (m *EditorModel) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		case "tab": // keymap: fb.toggleFocus
 			// 焦点在左栏列表 / 右栏预览之间切换
 			fb.ToggleFocus()
-		case "j", termd.KeyDown: // keymap: fb.down
+		case "j", "down": // keymap: fb.down
 			if fb.FocusRight {
 				fb.ScrollPreview(1) // 右栏：滚动预览
 			} else {
 				fb.Move(1) // 左栏：移动光标
 			}
-		case "k", termd.KeyUp: // keymap: fb.up
+		case "k", "up": // keymap: fb.up
 			if fb.FocusRight {
 				fb.ScrollPreview(-1) // 右栏：滚动预览
 			} else {
 				fb.Move(-1) // 左栏：移动光标
 			}
-		case termd.KeyPgDown: // keymap: fb.pageDown
+		case "pgdown": // keymap: fb.pageDown
 			if fb.FocusRight {
 				fb.ScrollPreview(visibleLines(m) - 2) // 右栏：半屏/整页下滚
 			} else {
 				fb.Move(visibleLines(m) - 2)
 			}
-		case termd.KeyPgUp: // keymap: fb.pageUp
+		case "pgup": // keymap: fb.pageUp
 			if fb.FocusRight {
 				fb.ScrollPreview(-(visibleLines(m) - 2)) // 右栏：整页上滚
 			} else {
 				fb.Move(-(visibleLines(m) - 2))
 			}
-		case termd.KeyEnter: // keymap: fb.confirm
+		case "enter": // keymap: fb.confirm
 			if path := fb.Confirm(); path != "" {
 				// 选定文件：关闭浏览器并加载该文件
 				fb.Close()

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"termd"
 
-	"github.com/charmbracelet/bubbletea"
+	"charm.land/bubbletea/v2"
 )
 
 // expandPercent 将命令行参数中的 `%` 展开为当前文件名，与 Vim 的 cmdline 变量语义保持一致：
@@ -53,7 +53,8 @@ func expandPercent(s, fname string) string {
 // Command 模式按键处理
 // ----------------------------------------------------------
 func (m *EditorModel) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+	key := msg.Key()
+	switch key.Code {
 	case tea.KeyEsc: // keymap: command.cancel
 		m.sm.ExitToPreview()
 		m.status = termd.T("已取消命令")
@@ -68,9 +69,12 @@ func (m *EditorModel) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeySpace: // keymap: command.space
 		m.sm.AppendCmd(' ')
 
-	case tea.KeyRunes: // keymap: command.rune
-		for _, r := range msg.Runes {
-			m.sm.AppendCmd(r)
+	default:
+		// 字符输入：key.Text 包含可打印字符
+		if key.Text != "" {
+			for _, r := range key.Text {
+				m.sm.AppendCmd(r)
+			}
 		}
 	}
 	return m, nil
@@ -174,6 +178,15 @@ func (m *EditorModel) executeCommand(input string) tea.Cmd {
 	case cmd == ":set nocursorblink":
 		m.blinkMode = false
 		m.status = termd.T("光标闪烁: 关闭")
+	case cmd == ":set cursor block":
+		m.cursorShape = 0
+		m.status = termd.T("光标形状: 块")
+	case cmd == ":set cursor bar":
+		m.cursorShape = 2
+		m.status = termd.T("光标形状: 竖线")
+	case cmd == ":set cursor underline":
+		m.cursorShape = 1
+		m.status = termd.T("光标形状: 下划线")
 	case cmd == ":set fileicons":
 		termd.FBUseIcons = true
 		m.status = termd.T("文件浏览器图标: 开启（需 Nerd Font 终端）")
@@ -275,12 +288,13 @@ func (m *EditorModel) executeCommand(input string) tea.Cmd {
 		dir := cmd[2:3] // 'k' 或 'j'
 		rest := strings.TrimSpace(cmd[3:])
 		var target int
+		lineCount := m.Buf.LineCount()
 		if rest == "" {
 			// 无行号：k 删到文件首行，j 删到文件末行。
 			if dir == "k" {
 				target = 0
 			} else {
-				target = m.Buf.LineCount() - 1
+				target = lineCount - 1
 			}
 		} else if _, err := fmt.Sscanf(rest, "%d", &target); err != nil || target < 1 {
 			m.status = termd.T("用法: :dk 行号 / :dj 行号（行号为 1-based）")
@@ -288,13 +302,38 @@ func (m *EditorModel) executeCommand(input string) tea.Cmd {
 		} else {
 			target-- // 1-based -> 0-based
 		}
+		// 修正：previewCursor 是 buffer 行号（0-based），确保 target 在合法范围内
+		if target < 0 {
+			target = 0
+		}
+		if target >= lineCount {
+			target = lineCount - 1
+		}
 		cur := m.previewCursor
+		if cur < 0 {
+			cur = 0
+		}
+		if cur >= lineCount {
+			cur = lineCount - 1
+		}
 		from := min(cur, target)
 		to := max(cur, target)
+		// 至少保留 1 行
+		if to >= lineCount {
+			to = lineCount - 1
+		}
+		if from < 0 {
+			from = 0
+		}
 		for row := to; row >= from; row-- {
 			m.Buf.DeleteLine(row)
 		}
-		m.previewCursor = clamp(from, 0, m.Buf.LineCount()-1)
+		// 删除后同步游标：至少保留 1 行
+		newCount := m.Buf.LineCount()
+		if newCount == 0 {
+			newCount = 1
+		}
+		m.previewCursor = clamp(from, 0, newCount-1)
 		m.cursorRow = m.previewCursor
 		m.scroll = 0
 		m.previewScroll = 0
