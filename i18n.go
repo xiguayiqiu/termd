@@ -269,6 +269,7 @@ var zhDict = map[string]string{
 	"从当前行向上删除到第 N 行":           "从当前行向上删除到第 N 行",
 	"从当前行向下删除到第 N 行":           "从当前行向下删除到第 N 行",
 	"查看键位帮助":                   "查看键位帮助",
+	"退出（有未保存改动时需 :q!）":              "Quit (use :q! if there are unsaved changes)",
 
 	// --- 命令模式命令帮助 (:help) ---
 	"termd 命令模式命令帮助（Esc 关闭本视图）":            "termd 命令模式命令帮助（Esc 关闭本视图）",

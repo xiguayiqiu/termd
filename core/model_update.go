@@ -52,6 +52,20 @@ func (m *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Ctrl+C 退出（keymap: app.quit）。
+		// 必要性：raw 模式下终端不会把 ^C 转成 SIGINT，而是作为 ctrl+c 按键
+		// 交给 Update；若不显式处理，用户按 Ctrl+C 毫无反应，只能另开终端
+		// kill 进程——那样属于「非正常终止」，.swp/.swl 必然残留。
+		// 语义与 :q 一致：有未保存改动时拒绝退出，避免误触丢数据。
+		if km, ok := msg.(tea.KeyPressMsg); ok && km.Keystroke() == termd.KeyCtrlC {
+			if m.Buf.IsDirty {
+				m.status = termd.T("有未保存改动，使用 :q! 强制退出")
+			} else {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		// 键位帮助视图打开时，仅响应 Esc 关闭（其余按键忽略）
 		if m.helpMode {
 			ks := ""

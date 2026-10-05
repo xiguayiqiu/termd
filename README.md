@@ -72,6 +72,7 @@ sudo cp termd /usr/local/bin/
 | `:` | 进入命令模式 |
 | `/` | 进入搜索（Preview 模式） |
 | `Ctrl+O` | 打开文件浏览器（Edit 模式） |
+| `Ctrl+C` | 退出（有未保存改动时需 `:q!`） |
 
 ### Preview 模式
 

@@ -254,16 +254,29 @@ p := tea.NewProgram(model, termd.WithFcitx5()...)
 		}
 	}
 
+	// 退出收尾：无论 p.Run 是正常返回（:q / :wq）还是被信号打断（SIGINT/SIGTERM
+	// 会让 bubbletea 返回错误），都必须走同一条清理路径，否则 .swp（交换文件）与
+	// .swl（锁文件）会残留在磁盘上，形成「正常关闭却留下缓存文件」的现象。
+	//
+	// os.Exit 会跳过尚未执行的 defer，因此这里只记录退出码，
+	// 由本 defer 完成清理后再真正退出。
+	var exitCode int
+	defer func() {
+		// 正常退出：优雅停止后台写盘并删除 .swp（干净退出，无需恢复）。
+		if model.Swap != nil {
+			model.Swap.Stop()
+		}
+		// 释放文件锁并删除 .swl 锁文件
+		model.Buf.UnlockFile()
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, termd.T("运行错误: %v\n"), err)
-		os.Exit(1)
+		exitCode = 1
 	}
-	// 正常退出：优雅停止后台写盘并删除 .swp（干净退出，无需恢复）。
-	if model.Swap != nil {
-		model.Swap.Stop()
-	}
-	// 释放文件锁
-	model.Buf.UnlockFile()
 }
 
 // convertMarkdownToDocx 将 Markdown 文件转换为 docx 文件

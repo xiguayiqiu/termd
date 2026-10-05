@@ -70,6 +70,14 @@ const (
 // DefaultKeyMap 是完整的键位注册表（单一事实来源）。
 // 顺序即展示顺序；同分组内聚合后展示。
 var DefaultKeyMap = []Binding{
+	// ---------------- 全局（所有模式均生效） ----------------
+	// raw 模式下 Ctrl+C 不会产生 SIGINT，而是作为按键送达 Update；
+	// 不显式绑定则 Ctrl+C 无任何反应，只能从外部 kill（属非正常终止，
+	// 会让 .swp/.swl 残留）。语义与 :q 相同：有未保存改动时拒绝退出。
+	{Modes: []EditorMode{ModeNamePreview, ModeNameEdit, ModeNameCommand, ModeNameFileBrowser},
+		Keys: []string{KeyCtrlC}, Action: "app.quit",
+		Description: "退出（有未保存改动时需 :q!）", Group: "全局"},
+
 	// ---------------- Preview 模式 ----------------
 	{Modes: []EditorMode{ModeNamePreview}, Keys: []string{"i", "e", "a"}, Action: "preview.enterEdit",
 		Description: "进入编辑模式（i/e 行首插入，a 行尾插入）", Group: "预览模式"},

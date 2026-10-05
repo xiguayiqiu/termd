@@ -26,6 +26,9 @@ type Buffer struct {
 	Encoding Encoding
 	// undoStack 操作历史栈，每个元素是一份完整的行快照
 	undoStack [][][]byte
+	// lockPath 是本次成功持有的锁文件路径（.<名>.swl），UnlockFile 据此删除它。
+	// 空串表示当前进程未持有锁（未命名文件 / 锁已被他人占用）。
+	lockPath string
 	// notify 是可选的变更回调（崩溃恢复用）：任何内容变更后触发一次，
 	// 由 SwapManager 通过 MarkDirty 让后台线程节流写盘。因在 bubbletea
 	// 单线程 Update 内同步调用，开销极小，绝不在回调里做重活。
@@ -96,32 +99,40 @@ func (b *Buffer) SetFilePath(path string) {
 	b.filePath = path
 }
 
+// lockPathFor 由正文文件路径推导 .swl 锁文件路径（同目录 + "." 前缀 + ".swl" 后缀）。
+// LockFile / IsLocked 共用，保证双方对同一文件的锁路径认知一致。
+func lockPathFor(filePath string) string {
+	return filepath.Join(filepath.Dir(filePath), "."+filepath.Base(filePath)+".swl")
+}
+
 // LockFile 尝试获取文件独占锁（使用 flock，跨平台兼容）。
 // 返回 true 表示获取锁成功，false 表示文件已被其他进程锁定。
 // 锁文件为同目录下的 .文件名.swl（swap lock）。
+//
+// 成功时记录 b.lockPath，使 UnlockFile 能在退出时删除这个锁文件：
+// flock 只随进程退出/文件描述符关闭而释放，磁盘上的 .swl 会一直残留，
+// 造成「正常关闭却留下缓存/锁文件」的观感。
 func (b *Buffer) LockFile() bool {
 	if b.filePath == "" {
 		return true // 未命名文件不需要锁
 	}
-	dir := filepath.Dir(b.filePath)
-	base := filepath.Base(b.filePath)
-	lockPath := filepath.Join(dir, "."+base+".swl")
-	
+	lockPath := lockPathFor(b.filePath)
+
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return false
 	}
-	
+
 	// 尝试非阻塞独占锁
 	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
 		f.Close()
 		return false // 已被其他进程锁定
 	}
-	
+
 	b.lockFile = f
+	b.lockPath = lockPath
 	// 写入当前 PID 以便调试
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) // 确认锁
 	f.Truncate(0)
 	f.Seek(0, 0)
 	f.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
@@ -129,12 +140,23 @@ func (b *Buffer) LockFile() bool {
 	return true
 }
 
-// UnlockFile 释放文件锁
+// UnlockFile 释放文件锁，并删除本次持有的 .swl 锁文件。
+//
+// 删除是安全的：flock 随 Close 立即释放，而 .swl 只是「本进程正在编辑」的
+// 标记文件——文件被删除后 flock 依然生效，直到本进程退出。因此不能反过来说
+// 「文件还在就说明还锁着」；IsLocked 探测的是别的进程是否仍持有 flock，
+// 与本文件是否存在无关（见 IsLocked：文件不存在同样返回未锁定）。
+// 仅删除自己成功获取的锁（b.lockPath 非空），绝不误删他人持有的锁文件。
 func (b *Buffer) UnlockFile() {
 	if b.lockFile != nil {
 		syscall.Flock(int(b.lockFile.Fd()), syscall.LOCK_UN)
 		b.lockFile.Close()
 		b.lockFile = nil
+	}
+	if b.lockPath != "" {
+		// 删除失败（如目录只读）不影响退出：flock 已在上面释放，锁已失效。
+		_ = os.Remove(b.lockPath)
+		b.lockPath = ""
 	}
 }
 
@@ -143,10 +165,8 @@ func (b *Buffer) IsLocked() (bool, int) {
 	if b.filePath == "" {
 		return false, 0
 	}
-	dir := filepath.Dir(b.filePath)
-	base := filepath.Base(b.filePath)
-	lockPath := filepath.Join(dir, "."+base+".swl")
-	
+	lockPath := lockPathFor(b.filePath)
+
 	f, err := os.OpenFile(lockPath, os.O_RDWR, 0o644)
 	if err != nil {
 		if os.IsNotExist(err) {
